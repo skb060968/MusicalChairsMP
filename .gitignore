@@ -1,0 +1,29 @@
+node_modules/
+dist/
+build/
+tests/
+
+.env
+.env.local
+.env.*.local
+
+npm-debug.log*
+
+.DS_Store
+Thumbs.db
+
+.vscode/
+.idea/
+.kiro/
+
+.vercel/
+
+*.bak
+*.backup
+
+# Firebase rules shared across all projects
+firebase-rules.json
+
+# Exclude documentation files (keep README.md)
+*.md
+!README.md

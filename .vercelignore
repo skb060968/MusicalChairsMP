@@ -1,0 +1,9 @@
+node_modules
+dist
+.kiro
+.env
+.env.local
+.env.*.local
+firebase-rules.json
+tests
+*.bak

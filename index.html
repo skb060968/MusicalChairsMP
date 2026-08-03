@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#7C3AED">
+    <meta name="description" content="Musical Chairs - a real-time multiplayer tap-to-survive elimination game for 2-8 players.">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Musical Chairs">
+    <title>Musical Chairs - Multiplayer</title>
+    <link rel="stylesheet" href="/style.css">
+    <link rel="stylesheet" href="/src/app-banner.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🪑</text></svg>">
+
+    <!-- PWA: manifest and installable icons -->
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" type="image/x-icon" href="/icons/favicon.ico" sizes="32x32">
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="/icons/icon-512.png">
+    <link rel="apple-touch-icon" href="/icons/icon-192.png">
+</head>
+<body>
+    <!-- Skip link for keyboard users -->
+    <a class="skip-link" href="#mainContent">Skip to main content</a>
+
+    <!-- Global controls (persist across all screens) -->
+    <div id="appControls" class="app-controls">
+        <button type="button" id="muteBtn" class="icon-btn" aria-pressed="false" aria-label="Mute sound">
+            <span id="muteIcon" class="icon-btn-glyph" aria-hidden="true">🔊</span>
+        </button>
+    </div>
+
+    <main id="mainContent" class="app-main">
+
+        <!-- ============================= Menu Screen ============================= -->
+        <section id="menuScreen" class="screen active" aria-labelledby="menuTitle">
+            <div class="screen-inner menu-container">
+                <header class="game-title">
+                    <h1 id="menuTitle">🪑 MUSICAL CHAIRS 🎵</h1>
+                    <p class="subtitle">Tap fast when the music stops. Last one standing wins.</p>
+                </header>
+
+                <nav class="menu-buttons" aria-label="Main menu">
+                    <button type="button" id="createRoomBtn" class="menu-btn primary">🎮 Create Room</button>
+                    <button type="button" id="joinRoomBtn" class="menu-btn">🚪 Join Room</button>
+                    <button type="button" id="instructionsBtn" class="menu-btn">📖 How to Play</button>
+                </nav>
+            </div>
+        </section>
+
+        <!-- ========================== Create Room Screen ========================= -->
+        <section id="createRoomScreen" class="screen" aria-labelledby="createRoomTitle">
+            <div class="screen-inner form-container">
+                <h2 id="createRoomTitle">Create Room</h2>
+
+                <form id="createRoomForm" class="form" novalidate>
+                    <div class="input-group">
+                        <label for="hostNameInput">Your name</label>
+                        <input type="text" id="hostNameInput" name="hostName" maxlength="15"
+                               placeholder="Enter your name" autocomplete="nickname"
+                               inputmode="text" required
+                               aria-describedby="hostNameHint hostNameError">
+                        <p id="hostNameHint" class="input-hint">Up to 15 characters. Everyone in the room will see this.</p>
+                        <p id="hostNameError" class="input-error" role="alert" hidden></p>
+                    </div>
+
+                    <fieldset class="avatar-field">
+                        <legend>Choose your avatar</legend>
+                        <div id="createAvatarPicker" class="avatar-picker" role="group" aria-describedby="createAvatarHint">
+                            <button type="button" class="avatar-choice selected" data-avatar="🐵" aria-label="Monkey avatar" aria-pressed="true">🐵</button>
+                            <button type="button" class="avatar-choice" data-avatar="🐱" aria-label="Cat avatar" aria-pressed="false">🐱</button>
+                            <button type="button" class="avatar-choice" data-avatar="🦊" aria-label="Fox avatar" aria-pressed="false">🦊</button>
+                            <button type="button" class="avatar-choice" data-avatar="🐼" aria-label="Panda avatar" aria-pressed="false">🐼</button>
+                            <button type="button" class="avatar-choice" data-avatar="🐸" aria-label="Frog avatar" aria-pressed="false">🐸</button>
+                            <button type="button" class="avatar-choice" data-avatar="🐧" aria-label="Penguin avatar" aria-pressed="false">🐧</button>
+                            <button type="button" class="avatar-choice" data-avatar="🦄" aria-label="Unicorn avatar" aria-pressed="false">🦄</button>
+                            <button type="button" class="avatar-choice" data-avatar="🐯" aria-label="Tiger avatar" aria-pressed="false">🐯</button>
+                        </div>
+                        <p id="createAvatarHint" class="input-hint">This avatar will represent you throughout the game.</p>
+                    </fieldset>
+
+                    <button type="submit" id="createRoomSubmitBtn" class="menu-btn primary">Create Room</button>
+                </form>
+
+                <button type="button" id="createRoomBackBtn" class="back-btn">← Back</button>
+            </div>
+        </section>
+
+        <!-- =========================== Join Room Screen ========================== -->
+        <section id="joinRoomScreen" class="screen" aria-labelledby="joinRoomTitle">
+            <div class="screen-inner form-container">
+                <h2 id="joinRoomTitle">Join Room</h2>
+
+                <form id="joinRoomForm" class="form" novalidate>
+                    <div class="input-group">
+                        <label for="playerNameInput">Your name</label>
+                        <input type="text" id="playerNameInput" name="playerName" maxlength="15"
+                               placeholder="Enter your name" autocomplete="nickname"
+                               inputmode="text" required
+                               aria-describedby="playerNameHint playerNameError">
+                        <p id="playerNameHint" class="input-hint">Up to 15 characters.</p>
+                        <p id="playerNameError" class="input-error" role="alert" hidden></p>
+                    </div>
+
+                    <div class="input-group">
+                        <label for="roomCodeInput">Room code</label>
+                        <input type="text" id="roomCodeInput" name="roomCode" class="room-code-input"
+                               maxlength="4" minlength="4" placeholder="ABCD"
+                               inputmode="text" autocapitalize="characters" autocomplete="off"
+                               autocorrect="off" spellcheck="false" pattern="[A-Za-z]{4}" required
+                               aria-describedby="roomCodeHint roomCodeError">
+                        <p id="roomCodeHint" class="input-hint">4 letters, for example ABCD.</p>
+                        <p id="roomCodeError" class="input-error" role="alert" hidden></p>
+                    </div>
+
+                    <fieldset class="avatar-field">
+                        <legend>Choose your avatar</legend>
+                        <div id="joinAvatarPicker" class="avatar-picker" role="group" aria-describedby="joinAvatarHint">
+                            <button type="button" class="avatar-choice selected" data-avatar="🐵" aria-label="Monkey avatar" aria-pressed="true">🐵</button>
+                            <button type="button" class="avatar-choice" data-avatar="🐱" aria-label="Cat avatar" aria-pressed="false">🐱</button>
+                            <button type="button" class="avatar-choice" data-avatar="🦊" aria-label="Fox avatar" aria-pressed="false">🦊</button>
+                            <button type="button" class="avatar-choice" data-avatar="🐼" aria-label="Panda avatar" aria-pressed="false">🐼</button>
+                            <button type="button" class="avatar-choice" data-avatar="🐸" aria-label="Frog avatar" aria-pressed="false">🐸</button>
+                            <button type="button" class="avatar-choice" data-avatar="🐧" aria-label="Penguin avatar" aria-pressed="false">🐧</button>
+                            <button type="button" class="avatar-choice" data-avatar="🦄" aria-label="Unicorn avatar" aria-pressed="false">🦄</button>
+                            <button type="button" class="avatar-choice" data-avatar="🐯" aria-label="Tiger avatar" aria-pressed="false">🐯</button>
+                        </div>
+                        <p id="joinAvatarHint" class="input-hint" role="status" aria-live="polite">Enter a room code to see which avatars are available.</p>
+                    </fieldset>
+
+                    <button type="submit" id="joinRoomSubmitBtn" class="menu-btn primary">Join Room</button>
+                </form>
+
+                <button type="button" id="joinRoomBackBtn" class="back-btn">← Back</button>
+            </div>
+        </section>
+
+        <!-- ========================== Instructions Screen ========================= -->
+        <section id="instructionsScreen" class="screen" aria-labelledby="instructionsTitle">
+            <div class="screen-inner instructions-container">
+                <h2 id="instructionsTitle">How to Play</h2>
+
+                <ol class="instructions-content">
+                    <li class="instruction-item">
+                        <span class="inst-icon" aria-hidden="true">🎯</span>
+                        <p><strong>Create or join a room</strong> using a 4-letter code. 2 to 8 players.</p>
+                    </li>
+                    <li class="instruction-item">
+                        <span class="inst-icon" aria-hidden="true">🎵</span>
+                        <p><strong>Listen to the music.</strong> It plays for a random 5 to 15 seconds.</p>
+                    </li>
+                    <li class="instruction-item">
+                        <span class="inst-icon" aria-hidden="true">👆</span>
+                        <p><strong>Tap the moment it stops.</strong> Only your first tap counts.</p>
+                    </li>
+                    <li class="instruction-item">
+                        <span class="inst-icon" aria-hidden="true">💥</span>
+                        <p><strong>Slowest tap is out.</strong> Anyone who never taps is out too.</p>
+                    </li>
+                    <li class="instruction-item">
+                        <span class="inst-icon" aria-hidden="true">🏆</span>
+                        <p><strong>Last player standing wins</strong> and the host can start a rematch.</p>
+                    </li>
+                </ol>
+
+                <button type="button" id="instructionsBackBtn" class="back-btn">← Back to Menu</button>
+            </div>
+        </section>
+
+        <!-- ============================ Lobby Screen ============================= -->
+        <section id="lobbyScreen" class="screen" aria-labelledby="lobbyTitle">
+            <div class="screen-inner lobby-container">
+                <h2 id="lobbyTitle">Waiting for Players</h2>
+
+                <div class="room-code-display">
+                    <span class="room-code-label" id="lobbyRoomCodeLabel">Room code</span>
+                    <output class="room-code-value" id="lobbyRoomCode" aria-labelledby="lobbyRoomCodeLabel">----</output>
+                </div>
+
+                <div class="lobby-actions" role="group" aria-label="Invite players">
+                    <button type="button" id="shareRoomBtn" class="menu-btn secondary">📋 Share Code</button>
+                    <button type="button" id="qrCodeBtn" class="menu-btn secondary">📱 QR Code</button>
+                </div>
+
+                <section class="players-section" aria-labelledby="lobbyPlayersHeading">
+                    <h3 id="lobbyPlayersHeading">
+                        Players <span id="playerCount" class="player-count">0/8</span>
+                    </h3>
+                    <ul id="playersList" class="players-list" aria-live="polite" aria-relevant="additions removals">
+                        <!-- Player items injected by src/main.js -->
+                    </ul>
+                </section>
+
+                <div class="lobby-footer">
+                    <button type="button" id="startGameBtn" class="menu-btn primary" hidden
+                            aria-describedby="startGameHint" disabled>Start Game</button>
+                    <p id="startGameHint" class="input-hint">Need at least 2 connected players to start.</p>
+                    <button type="button" id="leaveLobbyBtn" class="menu-btn danger">Leave Lobby</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============================= Game Screen ============================== -->
+        <section id="gameScreen" class="screen" aria-labelledby="gameTitle">
+            <h2 id="gameTitle" class="sr-only">Musical Chairs game in progress</h2>
+
+            <div class="screen-inner game-container">
+                <header class="game-header">
+                    <p class="round-indicator" id="roundIndicator" role="status" aria-live="polite">Round 1</p>
+                    <p class="room-code-inline">
+                        <span class="room-code-label" id="gameRoomCodeLabel">Room</span>
+                        <output class="room-code-inline-value" id="gameRoomCode" aria-labelledby="gameRoomCodeLabel">----</output>
+                    </p>
+                </header>
+
+                <div class="phase-block">
+                    <p class="phase-indicator" id="phaseIndicator" role="status" aria-live="polite">Get ready…</p>
+
+                    <div class="music-indicator" id="musicIndicator" hidden>
+                        <span class="music-note" aria-hidden="true">🎵</span>
+                        <span class="music-note" aria-hidden="true">🎶</span>
+                        <span class="music-note" aria-hidden="true">🎵</span>
+                        <span class="sr-only" id="musicIndicatorText">Music is playing</span>
+                    </div>
+
+                </div>
+
+                <!-- ===================== Musical chairs stage =====================
+                     Replaces the old #tapTarget. The stage IS the interaction
+                     surface and stays a real <button> so the keyboard and
+                     screen-reader contract survives.
+
+                     DOM contract (children are injected by src/main.js):
+                       #stageChairs     → <div class="chair" data-chair-id="chair_0"></div>
+                       #stageOrbit      → active-player <div class="actor"> nodes
+                       #stageSpectators → eliminated-player <div class="actor"> nodes
+                     JS owns POSITION (inline left/top percentages on every
+                     .chair / .actor); style.css owns APPEARANCE only.
+                     ================================================================ -->
+                <button type="button" id="stage" class="stage"
+                        aria-label="Musical chairs stage. When the music stops, drag your avatar onto a free chair."
+                        aria-describedby="stageHint">
+                    <div class="stage-floor" aria-hidden="true"></div>
+                    <div class="stage-chairs" id="stageChairs" aria-hidden="true"></div>
+                    <div class="stage-orbit" id="stageOrbit" aria-hidden="true"></div>
+                    <div class="stage-spectators" id="stageSpectators" aria-hidden="true"></div>
+                </button>
+                <p id="stageHint" class="stage-hint" role="status" aria-live="polite"></p>
+
+                <!-- Screen-reader equivalent of the visual ring: a ring of
+                     positioned emoji conveys nothing to assistive tech.
+                     One <li> per player (name + state), injected by main.js. -->
+                <ul id="stagePlayerList" class="sr-only" aria-label="Players and chairs"></ul>
+
+                <!-- Legacy claim/tap feedback region. src/main.js still writes here;
+                     it is being migrated to #stageHint by another task. -->
+                <p id="tapFeedback" class="tap-feedback" role="status" aria-live="assertive"></p>
+
+                <p id="spectatorNotice" class="spectator-notice" role="status" hidden>
+                    You are out. Watching the remaining rounds.
+                </p>
+
+                <p id="eliminationBanner" class="elimination-banner" role="status" aria-live="polite" hidden></p>
+
+                <section class="players-section" aria-labelledby="gamePlayersHeading">
+                    <h3 id="gamePlayersHeading" class="sr-only">Players</h3>
+                    <!-- Kept in the DOM (src/main.js still renders into it) but
+                         demoted to a compact single-row strip under the stage by
+                         the `.legacy-strip` class. Remove once main.js migrates
+                         to #stagePlayerList / the stage itself. -->
+                    <ul id="playerGrid" class="player-grid legacy-strip" aria-live="polite">
+                        <!-- Player cards injected by src/main.js -->
+                    </ul>
+                </section>
+            </div>
+        </section>
+
+        <!-- ============================ Victory Screen ============================ -->
+        <section id="victoryScreen" class="screen" aria-labelledby="victoryTitle">
+            <div class="screen-inner victory-container">
+                <h2 id="victoryTitle">🏆 Winner!</h2>
+
+                <div class="winner-card">
+                    <span class="winner-avatar" id="winnerAvatar" aria-hidden="true">🎉</span>
+                    <output class="winner-name" id="winnerName" aria-labelledby="victoryTitle">—</output>
+                </div>
+
+                <section class="rankings-section" aria-labelledby="rankingsHeading">
+                    <h3 id="rankingsHeading">Final Rankings</h3>
+                    <ol id="rankingsList" class="rankings-list" aria-live="polite">
+                        <!-- Ranking items injected by src/main.js -->
+                    </ol>
+                </section>
+
+                <div class="victory-actions">
+                    <button type="button" id="playAgainBtn" class="menu-btn primary" hidden>🔄 Play Again</button>
+                    <button type="button" id="returnToMenuBtn" class="menu-btn">🏠 Return to Menu</button>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- Toast notifications -->
+    <div id="toastNotification" class="toast-notification" role="status" aria-live="polite" aria-atomic="true" hidden></div>
+
+    <!-- Screen-reader only announcements for phase changes -->
+    <div id="liveAnnouncer" class="sr-only" role="status" aria-live="assertive" aria-atomic="true"></div>
+
+    <!-- Loading overlay -->
+    <div id="loadingOverlay" class="loading-overlay" role="alert" aria-live="assertive" aria-busy="true" hidden>
+        <div class="loading-content">
+            <div class="loading-spinner" aria-hidden="true"></div>
+            <p class="loading-text" id="loadingText">Loading…</p>
+        </div>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+</body>
+</html>

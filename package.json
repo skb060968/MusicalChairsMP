@@ -1,0 +1,38 @@
+{
+  "name": "musical-chairs",
+  "version": "1.0.0",
+  "description": "Musical Chairs — real-time multiplayer party game. Music stops, everyone taps, the slowest player is out. Last player standing wins.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:unit": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration",
+    "test:e2e": "vitest run tests/e2e",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "firebase": "^12.9.0",
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "4.1.10",
+    "fast-check": "4.9.0",
+    "jsdom": "27.4.0",
+    "vite": "^7.3.1",
+    "vitest": "4.1.10"
+  },
+  "keywords": [
+    "musical-chairs",
+    "elimination",
+    "party",
+    "tv",
+    "multiplayer",
+    "firebase",
+    "pwa"
+  ],
+  "license": "MIT"
+}
