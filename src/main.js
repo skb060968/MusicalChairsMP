@@ -928,6 +928,21 @@ function refreshJoinFormState() {
   );
 }
 
+/**
+ * Clear room-specific Join form state after a final room exit. `ABCD` remains
+ * the input placeholder; a fresh deep link can still prefill on the next load.
+ */
+function resetJoinRoomEntry() {
+  // Invalidate any room lookup still in flight before it can repaint the picker.
+  avatarAvailabilityRequest++;
+  deepLinkRoomCode = null;
+
+  const code = document.getElementById('roomCodeInput');
+  if (code) code.value = '';
+  setFieldError('roomCodeInput', 'roomCodeError', null);
+  applyAvatarAvailability({}, 'Enter a room code to see which avatars are available.');
+}
+
 /* --------------------------------- avatars -------------------------------- */
 
 /**
@@ -1568,7 +1583,10 @@ function teardownRoom({ keepSession = false } = {}) {
   clearGameplayTimers();
   clearRecoveryTimers();
   try { stopMusic(); } catch (_) {}
-  if (!keepSession) clearSession();
+  if (!keepSession) {
+    clearSession();
+    resetJoinRoomEntry();
+  }
 
   endDrag({ reason: 'leave-room' });
   renderedStageSignature = null;
