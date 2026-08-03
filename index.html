@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="theme-color" content="#7C3AED">
-    <meta name="description" content="Musical Chairs - a real-time multiplayer tap-to-survive elimination game for 2-8 players.">
+    <meta name="description" content="Musical Chairs - a real-time multiplayer drag-to-chair elimination game for 2-8 players.">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -39,7 +39,7 @@
             <div class="screen-inner menu-container">
                 <header class="game-title">
                     <h1 id="menuTitle">🪑 MUSICAL CHAIRS 🎵</h1>
-                    <p class="subtitle">Tap fast when the music stops. Last one standing wins.</p>
+                    <p class="subtitle">When the music stops, drag your avatar to a free chair. Last one standing wins.</p>
                 </header>
 
                 <nav class="menu-buttons" aria-label="Main menu">
@@ -145,23 +145,23 @@
                 <ol class="instructions-content">
                     <li class="instruction-item">
                         <span class="inst-icon" aria-hidden="true">🎯</span>
-                        <p><strong>Create or join a room</strong> using a 4-letter code. 2 to 8 players.</p>
+                        <p><strong>Create or join a room</strong> using a 4-letter code, then choose a unique avatar. 2 to 8 players.</p>
                     </li>
                     <li class="instruction-item">
                         <span class="inst-icon" aria-hidden="true">🎵</span>
-                        <p><strong>Listen to the music.</strong> It plays for a random 5 to 15 seconds.</p>
+                        <p><strong>Listen to the music.</strong> Your avatars orbit the chairs for a random 30 to 60 seconds, with no countdown.</p>
                     </li>
                     <li class="instruction-item">
-                        <span class="inst-icon" aria-hidden="true">👆</span>
-                        <p><strong>Tap the moment it stops.</strong> Only your first tap counts.</p>
+                        <span class="inst-icon" aria-hidden="true">🫳</span>
+                        <p><strong>Drag when the music stops.</strong> Move your avatar toward any free chair.</p>
+                    </li>
+                    <li class="instruction-item">
+                        <span class="inst-icon" aria-hidden="true">🪑</span>
+                        <p><strong>Enter a chair's capture zone.</strong> The first valid claim wins that chair; release is not required.</p>
                     </li>
                     <li class="instruction-item">
                         <span class="inst-icon" aria-hidden="true">💥</span>
-                        <p><strong>Slowest tap is out.</strong> Anyone who never taps is out too.</p>
-                    </li>
-                    <li class="instruction-item">
-                        <span class="inst-icon" aria-hidden="true">🏆</span>
-                        <p><strong>Last player standing wins</strong> and the host can start a rematch.</p>
+                        <p><strong>Players without chairs are out.</strong> The last player standing wins, and the host can start a rematch.</p>
                     </li>
                 </ol>
 
@@ -228,9 +228,8 @@
                 </div>
 
                 <!-- ===================== Musical chairs stage =====================
-                     Replaces the old #tapTarget. The stage IS the interaction
-                     surface and stays a real <button> so the keyboard and
-                     screen-reader contract survives.
+                     The stage is the interaction surface and stays a real
+                     <button> for keyboard and screen-reader accessibility.
 
                      DOM contract (children are injected by src/main.js):
                        #stageChairs     → <div class="chair" data-chair-id="chair_0"></div>
@@ -253,10 +252,6 @@
                      positioned emoji conveys nothing to assistive tech.
                      One <li> per player (name + state), injected by main.js. -->
                 <ul id="stagePlayerList" class="sr-only" aria-label="Players and chairs"></ul>
-
-                <!-- Legacy claim/tap feedback region. src/main.js still writes here;
-                     it is being migrated to #stageHint by another task. -->
-                <p id="tapFeedback" class="tap-feedback" role="status" aria-live="assertive"></p>
 
                 <p id="spectatorNotice" class="spectator-notice" role="status" hidden>
                     You are out. Watching the remaining rounds.

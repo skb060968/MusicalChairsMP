@@ -1,7 +1,7 @@
 {
   "name": "musical-chairs",
   "version": "1.0.0",
-  "description": "Musical Chairs — real-time multiplayer party game. Music stops, everyone taps, the slowest player is out. Last player standing wins.",
+  "description": "Musical Chairs — real-time multiplayer party game. When the music stops, race your avatar to a free chair. Last player standing wins.",
   "type": "module",
   "scripts": {
     "dev": "vite --host",

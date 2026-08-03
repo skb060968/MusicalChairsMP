@@ -856,15 +856,15 @@ summary:focus-visible,
     box-shadow: 0 0 0 1px rgba(167, 139, 250, 0.35), var(--shadow-card);
 }
 
-/* TAPPED — green ring plus a check glyph */
-.player-card.tapped,
-.player-item.tapped {
+/* SEATED — green ring plus a check glyph */
+.player-card.seated,
+.player-item.seated {
     border-color: var(--success);
     background: linear-gradient(180deg, rgba(52, 211, 153, 0.26) 0%, rgba(16, 122, 87, 0.18) 100%);
 }
 
-.player-card.tapped::after,
-.player-item.tapped::after {
+.player-card.seated::after,
+.player-item.seated::after {
     content: "✅";
     position: absolute;
     top: 4px;
@@ -873,7 +873,7 @@ summary:focus-visible,
     line-height: 1;
 }
 
-.player-item.tapped {
+.player-item.seated {
     position: relative;
 }
 
@@ -1032,7 +1032,8 @@ summary:focus-visible,
 /* ====================================================================== */
 /* ===================== 12b. MUSICAL CHAIRS STAGE ====================== */
 /* ======================================================================
-   Replaces the old `.tap-target`. Target viewport: MOBILE PORTRAIT.
+   Primary interaction surface for the chair-claiming game. Target viewport:
+   MOBILE PORTRAIT.
 
    A ring of chairs with player avatars orbiting OUTSIDE the ring. The
    `<button id="stage">` itself is the interaction surface.
@@ -1487,19 +1488,6 @@ summary:focus-visible,
 
 .stage-hint.error,
 .stage-hint.late {
-    color: #fca5a5;
-}
-
-.tap-feedback {
-    min-height: 1.4em;
-    margin: 0;
-    text-align: center;
-    font-weight: 800;
-    color: var(--success);
-}
-
-.tap-feedback.late,
-.tap-feedback.error {
     color: #fca5a5;
 }
 

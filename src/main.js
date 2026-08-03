@@ -28,9 +28,7 @@
  *     elements by SECTION 10. JS owns their POSITION (inline left/top
  *     percentages) while style.css owns their appearance. `#stageHint` is the
  *     claim feedback region; `#stagePlayerList` is its sr-only equivalent
- *     because the ring itself is `aria-hidden`. The old `#tapTarget` /
- *     `#tapTargetLabel` are gone and `#tapFeedback` is a legacy region nothing
- *     writes to any more.
+ *     because the ring itself is `aria-hidden`.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * SECTION MAP (later tasks append into their own labelled section)
@@ -313,7 +311,7 @@ let sessionRestoreInFlight = false;
 let reassertInFlight = false;
 let lastReassertAt = 0;
 
-/** Reconnection grace window before a dropped player becomes a non-tapper (Req 11.4). */
+/** Reconnection grace window before a dropped player becomes unseated (Req 11.4). */
 let reconnectGraceTimer = null;
 /** Round whose grace window has already been spent (one window per round). */
 let reconnectGraceRound = 0;
@@ -2002,33 +2000,18 @@ function setPhaseText(text) {
  * Write `#stageHint` — the claim feedback line (already `role="status"`
  * `aria-live="polite"`, so this must not also be announced).
  *
- * This replaced the old `setTapFeedback`. `#tapFeedback` still exists in
- * index.html as a legacy region but is no longer written to; it is emptied once
- * per phase by {@link clearLegacyTapFeedback} so a stale line from an older
- * build can never linger under the stage.
- *
  * @param {string} text
  * @param {''|'success'|'late'|'error'} [variant='']
  */
 function setStageHint(text, variant = '') {
-  clearLegacyTapFeedback();
   const node = document.getElementById('stageHint');
   if (!node) return;
   node.className = variant ? `stage-hint ${variant}` : 'stage-hint';
   node.textContent = String(text || '');
 }
 
-/** Empty the legacy `#tapFeedback` region — nothing writes to it any more. */
-function clearLegacyTapFeedback() {
-  const legacy = document.getElementById('tapFeedback');
-  if (!legacy || legacy.textContent === '') return;
-  legacy.textContent = '';
-  legacy.className = 'tap-feedback';
-}
-
 /**
- * Neutral stage: no orbit, no drag window, just the hint. Replaces the old
- * `setTapTargetIdle`, which drove the deleted `#tapTarget`.
+ * Neutral stage: no orbit or drag window, just the supplied hint.
  * @param {string} hint
  */
 function setStageIdle(hint) {
@@ -2047,8 +2030,8 @@ function setMusicIndicatorVisible(visible) {
 /**
  * Rebuild `#playerGrid` (Req 14.3, 14.4). Unchanged in structure — style.css
  * has demoted it to a compact strip under the stage (`.legacy-strip`).
- * Cards carry `.player-card` plus `.active` / `.tapped` (reused for "seated") /
- * `.eliminated` / `.disconnected` / `.is-host` / `.is-you` / `.winner`.
+ * Cards carry `.player-card` plus `.active` / `.seated` / `.eliminated` /
+ * `.disconnected` / `.is-host` / `.is-you` / `.winner`.
  *
  * Skipped while the elimination animation runs: a rebuild would restart the
  * `.eliminating` keyframe (Req 8.1).
@@ -2075,7 +2058,7 @@ export function updatePlayerGrid(players = currentPlayers, chairs = currentChair
     const card = document.createElement('li');
     const classes = ['player-card'];
     if (eliminated) classes.push('eliminated');
-    else if (hasChair) classes.push('tapped');
+    else if (hasChair) classes.push('seated');
     else classes.push('active');
     if (player.connected === false) classes.push('disconnected');
     if (id === playerKey(0)) classes.push('is-host');
@@ -3050,7 +3033,7 @@ export function showEliminationBanner(names, rank) {
   banner.removeAttribute('hidden');
 }
 
-/** Hide the elimination banner (start of the next music/tap phase). */
+/** Hide the elimination banner before the next music or claiming phase. */
 function clearEliminationBanner() {
   const banner = document.getElementById('eliminationBanner');
   if (!banner) return;

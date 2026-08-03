@@ -3,7 +3,7 @@
  * Handles room management and real-time game state synchronization
  *
  * Rooms are stored under `musical-chairs-rooms/{roomCode}` with the nodes
- * meta / players / game / chairs (and the legacy `taps` node).
+ * meta / players / game / chairs.
  *
  * `chairs/{chairId}` is CREATE-ONLY for players under the deployed rules, which
  * is what arbitrates the drag-to-claim race: the second device to reach a chair
@@ -204,8 +204,6 @@ export async function joinRoom(roomCode, playerName, avatar) {
  * @param {Function} callbacks.onGameUpdate - Called when game state updates (receives game state and status)
  * @param {Function} callbacks.onChairsChange - Called when chair claims change
  *   (receives `chairs`: chairId → { playerId, claimedAt })
- * @param {Function} callbacks.onTapsChange - Legacy tap listener, kept for
- *   back-compat with any caller that has not migrated to `onChairsChange`
  * @param {Function} callbacks.onRoomDeleted - Called when room is deleted
  * @returns {Function} Unsubscribe function
  */
@@ -231,10 +229,6 @@ export function listenRoom(roomCode, callbacks) {
 
     if (callbacks.onChairsChange) {
       callbacks.onChairsChange(data.chairs || {});
-    }
-
-    if (callbacks.onTapsChange) {
-      callbacks.onTapsChange(data.taps || {});
     }
 
     if (callbacks.onGameUpdate && data.game) {
@@ -283,14 +277,6 @@ export async function endGame(roomCode) {
     status: 'finished',
     lastActivity: Date.now(),
   });
-}
-
-/**
- * Clears all tap data for the room (called between rounds)
- * @param {string} roomCode - Room code
- */
-export async function clearTaps(roomCode) {
-  await remove(ref(db, `${GAME_ID}-rooms/${roomCode}/taps`));
 }
 
 /**
