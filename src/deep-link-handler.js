@@ -10,6 +10,8 @@
 
 import QRCode from 'qrcode';
 
+const PRODUCTION_ORIGIN = 'https://musical-chairs-mp.vercel.app';
+
 // Simple showToast function
 function showToast(message, duration = 3000) {
   const existing = document.getElementById('toast-notification');
@@ -101,28 +103,17 @@ export function createShareHandler(roomCode, gameName = 'Musical Chairs') {
   return async function handleShare() {
     if (!roomCode) return;
     
-    // Use production domain if available, otherwise use current origin
-    let baseUrl = location.origin;
-    
-    // Check if we're on a Vercel preview/staging URL and map to production
-    const hostname = location.hostname;
-    if (hostname.includes('musical-chairs') && hostname.includes('vercel.app')) {
-      // Always use the production domain for sharing
-      baseUrl = 'https://musical-chairs.vercel.app';
-    }
-    
+    // Invitations always target the canonical production deployment.
+    const baseUrl = PRODUCTION_ORIGIN;
+
     // Include room code in URL for direct joining
     const shareUrl = `${baseUrl}/?room=${roomCode}`;
-    const text = `Join my ${gameName} room! Code: ${roomCode}`;
-    
+    const invitation = `Join  ${shareUrl}`;
+
     // Try native share API first (mobile)
     if (navigator.share) {
       try {
-        await navigator.share({
-          title: gameName,
-          text,
-          url: shareUrl
-        });
+        await navigator.share({ text: invitation });
         return;
       } catch (err) {
         // User cancelled or share failed
@@ -134,7 +125,7 @@ export function createShareHandler(roomCode, gameName = 'Musical Chairs') {
     
     // Fallback to clipboard
     try {
-      await navigator.clipboard.writeText(`${text}\n${shareUrl}`);
+      await navigator.clipboard.writeText(invitation);
       showToast('Room link copied!');
     } catch (err) {
       // Clipboard failed, just show the code
@@ -256,16 +247,9 @@ async function handleOpenApp(gameName, isMobile) {
 export async function showQRCode(roomCode, gameName = 'Musical Chairs') {
   if (!roomCode) return;
   
-  // Use production domain if available, otherwise use current origin
-  let baseUrl = location.origin;
-  
-  // Check if we're on a Vercel preview/staging URL and map to production
-  const hostname = location.hostname;
-  if (hostname.includes('musical-chairs') && hostname.includes('vercel.app')) {
-    // Always use the production domain for sharing
-    baseUrl = 'https://musical-chairs.vercel.app';
-  }
-  
+  // QR codes always target the canonical production deployment.
+  const baseUrl = PRODUCTION_ORIGIN;
+
   // Build share URL with room code
   const shareUrl = `${baseUrl}/?room=${roomCode}`;
   

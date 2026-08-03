@@ -1206,17 +1206,14 @@ summary:focus-visible,
     will-change: transform;
 }
 
-/* The capture element remains circular and unrotated. Only this decorative
-   artwork layer turns, keeping outlines, badges, targeting and hit geometry
-   independent from the supplied chair's visual orientation. The PNG faces
-   downward at 0deg, so main.js subtracts 90deg from each radial ring angle. */
+/* The capture element and supplied chair artwork remain unrotated. Keeping the
+   perspective PNG upright avoids upside-down chairs while JS distributes each
+   circular wrapper evenly around the ring. */
 .chair::before {
     content: "";
     position: absolute;
     inset: -10%;
     background: url("/images/chair.png") center / contain no-repeat;
-    transform: rotate(var(--chair-artwork-rotation, 0deg));
-    transform-origin: 50% 50%;
     pointer-events: none;
 }
 

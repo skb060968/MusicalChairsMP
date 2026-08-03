@@ -2254,11 +2254,6 @@ function buildStage({ force = false } = {}) {
     chair.dataset.chairId = chairId;
     const { left, top } = ringPosition(index, ids.length, chairRadius);
     setStagePosition(chair, left, top);
-    // chair.png faces down at 0deg. Rotate only its ::before artwork so the
-    // front of each seat points away from the centre without rotating the
-    // capture wrapper, target outline, badge or snap coordinate.
-    const outwardArtworkRotation = -180 + (index * 360) / Math.max(ids.length, 1);
-    chair.style.setProperty('--chair-artwork-rotation', `${round2(outwardArtworkRotation)}deg`);
     chairFragment.appendChild(chair);
   });
   chairsLayer.replaceChildren(chairFragment);

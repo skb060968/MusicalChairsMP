@@ -5,7 +5,7 @@
  * Installed PWAs only pick up new assets when the cache name changes, so a
  * deploy without a version bump leaves players on stale JS/CSS.
  */
-const CACHE_VERSION = 'v1.7.0'; // Chair-game copy and legacy tap-interface cleanup
+const CACHE_VERSION = 'v1.9.0'; // Keep circular chair artwork upright
 const CACHE_NAME = `musical-chairs-${CACHE_VERSION}`;
 
 /*
