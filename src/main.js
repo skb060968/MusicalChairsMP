@@ -1700,15 +1700,10 @@ export async function handleStartGame() {
   if (button) button.disabled = true;
   showLoading('Starting game…');
 
-  // Req 3.3 — every connected player, the host included, is an active player.
-  const initialGame = toFirebaseGameState({
-    round: 1,
-    activePlayerIds,
-    musicDuration: 0,
-    musicStartTime: 0,
-    phase: PHASES.LOBBY,
-    eliminatedThisRound: [],
-  });
+  // Req 3.3 — every connected player, the host included, starts round one.
+  // Status and game phase transition atomically to the first music phase so
+  // schema-v2 observers never see the forbidden playing/lobby combination.
+  const initialGame = buildMusicPhaseState(1, activePlayerIds);
 
   try {
     await startGame(gameState.roomCode, initialGame);
@@ -1722,19 +1717,9 @@ export async function handleStartGame() {
 
   resetRoundViewState();
   eliminationHistory = [];
-  gameState.round = 1;
-  gameState.activePlayerIds = activePlayerIds;
-
-  if (isHostLossActive()) {
-    hideLoading();
-    return;
-  }
-  const result = await startMusicPhase(gameState.roomCode, { round: 1, activePlayerIds });
+  gameState.round = initialGame.round;
+  gameState.activePlayerIds = [...initialGame.activePlayerIds];
   hideLoading();
-  if (!result.ok && !result.skipped) {
-    showToast(result.message || 'Could not start the first round', true);
-    if (button) button.disabled = false;
-  }
 }
 
 /** Leave the room from the lobby (Req 17.4). */
@@ -3743,8 +3728,9 @@ async function restoreRoom(session, room) {
   // server time, and clears hostDisconnectedAt when this is the host.
   const reconnected = await reassertConnected('rejoin');
 
-  // The previous onDisconnect registration died with that socket.
-  await attachDisconnectHandler();
+  // The previous onDisconnect registration died with that socket. Re-arm only
+  // after the atomic restore cleared any host-loss marker successfully.
+  if (reconnected) await attachDisconnectHandler();
 
   // Req 11.8 — rewrite the session so `savedAt` (and any corrected host flag)
   // is fresh for the next reload.
@@ -3833,8 +3819,8 @@ async function handleReconnect(info) {
   if (!gameState.roomCode || leavingRoom) return;
 
   clearRoomLifecycleTimers();
-  await reassertConnected('reconnect');
-  await attachDisconnectHandler();
+  const restored = await reassertConnected('reconnect');
+  if (restored) await attachDisconnectHandler();
   if (!unsubscribeRoom) startRoomListener(gameState.roomCode);
   scheduleHostLossCleanup();
 
@@ -4204,8 +4190,8 @@ function initSessionRecovery() {
   const onVisibilityChange = async () => {
     if (document.visibilityState !== 'visible') return;
     if (!gameState.roomCode || leavingRoom) return;
-    await reassertConnected('visible');
-    await attachDisconnectHandler();
+    const restored = await reassertConnected('visible');
+    if (restored) await attachDisconnectHandler();
   };
   document.addEventListener('visibilitychange', onVisibilityChange);
   teardownCallbacks.push(() => document.removeEventListener('visibilitychange', onVisibilityChange));
