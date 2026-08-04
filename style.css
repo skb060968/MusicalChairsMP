@@ -1324,7 +1324,8 @@ summary:focus-visible,
 .actor.is-you::after {
     content: "YOU";
     position: absolute;
-    bottom: -0.85em;
+    top: -0.95em;
+    bottom: auto;
     left: 50%;
     transform: translateX(-50%);
     padding: 1px 7px;
@@ -1336,6 +1337,16 @@ summary:focus-visible,
     letter-spacing: 0.1em;
     line-height: 1.5;
     white-space: nowrap;
+}
+
+/* A local host uses one combined top marker instead of overlapping the crown
+   and YOU label. Other players still see the host crown above that avatar. */
+.actor.is-you.is-host::after {
+    content: "👑 YOU";
+}
+
+.actor.is-you.is-host::before {
+    content: none;
 }
 
 /* IS-HOST — crown above the avatar */
