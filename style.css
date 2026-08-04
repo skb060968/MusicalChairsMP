@@ -1221,9 +1221,14 @@ summary:focus-visible,
     pointer-events: none;
 }
 
-/* AVAILABLE — free seat: solid green ring, full contrast */
+/* AVAILABLE — free seats stay visually neutral while music is playing. */
 .chair.available {
     opacity: 1;
+    outline: none;
+}
+
+/* Reveal capture targets only after the music stops and claiming opens. */
+.stage.claiming .chair.available {
     outline: 2px solid rgba(52, 211, 153, 0.85);
     outline-offset: 2px;
 }
