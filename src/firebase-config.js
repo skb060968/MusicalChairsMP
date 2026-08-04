@@ -17,31 +17,53 @@ export const db = getDatabase(app);
 export const auth = getAuth(app);
 
 /**
- * Resolves once anonymous auth has completed.
- * Resolves with the signed-in user, or with `null` if sign-in failed.
- * Firebase security rules match `auth.uid` against `meta/hostUid` and
- * `players/player_N/uid`, so always await this before reading a uid.
+ * Resolves once one stable anonymous identity is ready for RTDB authorization.
+ * A persisted user is reused; anonymous sign-in starts only after Auth reports
+ * no current user. This avoids replacing the identity while a room payload is
+ * being prepared with ownership fields tied to `auth.uid`.
  */
 export const authReady = new Promise((resolve) => {
-  const unsubscribe = onAuthStateChanged(
+  let settled = false;
+  let signInStarted = false;
+  let unsubscribe = () => {};
+
+  const finish = async (user) => {
+    if (settled) return;
+    settled = true;
+    unsubscribe();
+
+    if (user && typeof user.getIdToken === 'function') {
+      try {
+        await user.getIdToken();
+      } catch (err) {
+        console.error('Auth token error:', err);
+        resolve(null);
+        return;
+      }
+    }
+    resolve(user || null);
+  };
+
+  unsubscribe = onAuthStateChanged(
     auth,
     (user) => {
       if (user) {
-        unsubscribe();
-        resolve(user);
+        finish(user);
+        return;
       }
+      if (signInStarted) return;
+
+      signInStarted = true;
+      signInAnonymously(auth)
+        .then((credential) => finish(credential.user))
+        .catch((err) => {
+          console.error('Auth error:', err);
+          finish(null);
+        });
     },
     (err) => {
       console.error('Auth error:', err);
-      unsubscribe();
-      resolve(null);
-    }
+      finish(null);
+    },
   );
-
-  signInAnonymously(auth).catch((err) => {
-    console.error('Auth error:', err);
-    // Only settles if onAuthStateChanged never produced a user.
-    unsubscribe();
-    resolve(auth.currentUser || null);
-  });
 });

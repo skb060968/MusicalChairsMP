@@ -129,7 +129,10 @@ export function createInitialGameState() {
     playerIndex: null,
     isHost: false,
 
-    // Synced from Firebase
+    // Synced from Firebase metadata. Missing metadata is legacy v1; fresh local
+    // state defaults to v2 so isolated tests and all newly-created rooms use
+    // round-tagged claims.
+    schemaVersion: 2,
     round: 1,
     activePlayerIds: [],
     musicDuration: 0,
@@ -446,16 +449,29 @@ export function buildMusicPhaseState(round, activePlayerIds, options = {}) {
  * @returns {Object} Firebase-ready `game` node
  */
 export function toFirebaseGameState(state) {
-  const src = state && typeof state === 'object' ? state : {};
+  const src = state && typeof state === 'object' && !Array.isArray(state) ? state : {};
+  const activePlayerIds = uniqueIds(src.activePlayerIds).filter(isValidWinnerId);
+  const eliminatedThisRound = uniqueIds(src.eliminatedThisRound)
+    .filter((id) => isValidWinnerId(id) && !activePlayerIds.includes(id));
+  const duration = Number.isInteger(src.musicDuration)
+    && (src.musicDuration === 0
+      || (src.musicDuration >= MUSIC_DURATION_MIN_MS && src.musicDuration <= MUSIC_DURATION_MAX_MS))
+    ? src.musicDuration
+    : 0;
+
   const node = {
-    round: Number.isFinite(src.round) && src.round >= 1 ? Math.floor(src.round) : 1,
-    activePlayerIds: Array.isArray(src.activePlayerIds) ? [...src.activePlayerIds] : [],
-    musicDuration: Number.isFinite(src.musicDuration) ? Math.round(src.musicDuration) : 0,
-    musicStartTime: Number.isFinite(src.musicStartTime) ? src.musicStartTime : 0,
+    round: Number.isInteger(src.round) && src.round >= 1 ? src.round : 1,
+    activePlayerIds,
+    musicDuration: duration,
+    musicStartTime: Number.isFinite(src.musicStartTime) && src.musicStartTime >= 0
+      ? src.musicStartTime
+      : 0,
     phase: Object.values(PHASES).includes(src.phase) ? src.phase : PHASES.LOBBY,
-    eliminatedThisRound: Array.isArray(src.eliminatedThisRound) ? [...src.eliminatedThisRound] : [],
+    eliminatedThisRound,
   };
-  if (isValidWinnerId(src.winnerId)) node.winnerId = src.winnerId;
+  if (isValidWinnerId(src.winnerId) && activePlayerIds.includes(src.winnerId)) {
+    node.winnerId = src.winnerId;
+  }
   return node;
 }
 
@@ -501,7 +517,7 @@ export async function startMusicPhase(roomCode, options = {}) {
     [roomPath(roomCode, 'game/phase')]: PHASES.MUSIC,
     [roomPath(roomCode, 'game/eliminatedThisRound')]: null,
     [roomPath(roomCode, 'chairs')]: null,
-    [roomPath(roomCode, 'meta/lastActivity')]: Date.now(),
+    [roomPath(roomCode, 'meta/lastActivity')]: startedAt,
   };
 
   const result = await withRetry(() => applyUpdates(updates, options), {
@@ -535,9 +551,10 @@ export async function startMusicPhase(roomCode, options = {}) {
 export async function startClaimPhase(roomCode, options = {}) {
   if (!isHostWriter(options)) return { ok: false, skipped: 'not-host' };
 
+  const activityAt = await resolveServerTimestamp(options);
   const updates = {
     [roomPath(roomCode, 'game/phase')]: PHASES.CLAIMING,
-    [roomPath(roomCode, 'meta/lastActivity')]: Date.now(),
+    [roomPath(roomCode, 'meta/lastActivity')]: activityAt,
   };
 
   const result = await withRetry(() => applyUpdates(updates, options), {
@@ -697,18 +714,63 @@ export function isValidChairId(id) {
  * Normalizes a `chairs` node into `{ chairId: { playerId, claimedAt } }`,
  * dropping malformed entries. Pure — always a fresh object.
  *
+ * A claim is accepted only when it is an exact schema-v2 record and agrees
+ * with all authoritative round context supplied by the caller (or the shared
+ * `gameState` when UI callers omit options). Stale or partially-synced data
+ * must never decide an elimination.
+ *
  * @param {Object|null|undefined} chairs - Firebase `chairs` node
- * @returns {Object<string, { playerId: string, claimedAt: number }>}
+ * @param {Object} [options] - Authoritative game context; defaults field-by-field
+ *   to the shared `gameState`
+ * @param {number} [options.round] - Current `game.round`
+ * @param {string} [options.phase] - Current `game.phase`
+ * @param {string[]} [options.activePlayerIds] - Current active IDs
+ * @param {Object} [options.players] - Current `players` node
+ * @returns {Object<string, { playerId: string, claimedAt: number, round: number }>}
  */
-function normalizeChairs(chairs) {
-  if (!chairs || typeof chairs !== 'object') return {};
+export function normalizeChairs(chairs, options = {}) {
+  if (!chairs || typeof chairs !== 'object' || Array.isArray(chairs)) return {};
+
+  const round = options.round !== undefined ? options.round : gameState.round;
+  const schemaVersion = options.schemaVersion !== undefined
+    ? options.schemaVersion
+    : (gameState.schemaVersion ?? 2);
+  const isLegacy = schemaVersion === 1;
+  const phase = options.phase !== undefined ? options.phase : gameState.phase;
+  const sourceActiveIds = options.activePlayerIds !== undefined
+    ? options.activePlayerIds
+    : gameState.activePlayerIds;
+  const players = options.players !== undefined ? options.players : gameState.players;
+  if (!Number.isInteger(round) || round < 1 || phase !== PHASES.CLAIMING) return {};
+  if (!players || typeof players !== 'object' || Array.isArray(players)) return {};
+
+  const activePlayerIds = uniqueIds(sourceActiveIds).filter(isValidWinnerId);
+  const active = new Set(activePlayerIds);
+  const availableChairs = new Set(chairIds(chairCountFor(activePlayerIds)));
   const out = {};
+
   for (const [id, record] of Object.entries(chairs)) {
-    if (!isValidChairId(id) || !record || typeof record !== 'object') continue;
-    if (typeof record.playerId !== 'string' || record.playerId.length === 0) continue;
+    if (!availableChairs.has(id) || !record || typeof record !== 'object' || Array.isArray(record)) continue;
+    const keys = Object.keys(record).sort();
+    const exactV2 = keys.length === 3
+      && keys[0] === 'claimedAt'
+      && keys[1] === 'playerId'
+      && keys[2] === 'round';
+    const exactLegacy = keys.length === 2
+      && keys[0] === 'claimedAt'
+      && keys[1] === 'playerId';
+    if (isLegacy ? !exactLegacy : !exactV2) continue;
+    if (!isValidWinnerId(record.playerId) || !active.has(record.playerId)) continue;
+    if (!Number.isFinite(record.claimedAt)) continue;
+    if (!isLegacy && (!Number.isInteger(record.round) || record.round !== round)) continue;
+
+    const player = players[record.playerId];
+    if (!player || player.connected !== true || player.eliminated !== false) continue;
+
     out[id] = {
       playerId: record.playerId,
-      claimedAt: Number.isFinite(record.claimedAt) ? record.claimedAt : 0,
+      claimedAt: record.claimedAt,
+      round: isLegacy ? round : record.round,
     };
   }
   return out;
@@ -730,8 +792,8 @@ function sortedChairIds(chairs) {
  * @param {Object|null|undefined} chairs - Firebase `chairs` node
  * @returns {string[]} Seated player IDs
  */
-export function seatedPlayerIds(chairs) {
-  const normalized = normalizeChairs(chairs);
+export function seatedPlayerIds(chairs, options = {}) {
+  const normalized = normalizeChairs(chairs, options);
   const seen = new Set();
   const out = [];
   for (const id of sortedChairIds(normalized)) {
@@ -752,9 +814,9 @@ export function seatedPlayerIds(chairs) {
  * @param {string} playerId - e.g. `player_2`
  * @returns {string|null} chairId, or null when the player has no chair
  */
-export function chairOf(chairs, playerId) {
+export function chairOf(chairs, playerId, options = {}) {
   if (typeof playerId !== 'string') return null;
-  const normalized = normalizeChairs(chairs);
+  const normalized = normalizeChairs(chairs, options);
   for (const id of sortedChairIds(normalized)) {
     if (normalized[id].playerId === playerId) return id;
   }
@@ -785,6 +847,7 @@ export function chairOf(chairs, playerId) {
 export function canClaimChair(state, chairId) {
   if (!state || typeof state !== 'object') return false;
   if (state.phase !== PHASES.CLAIMING) return false;
+  if (!Number.isInteger(state.round) || state.round < 1) return false;
   if (!isValidChairId(chairId)) return false;
   if (state.hasLocalPlayerClaimed === true) return false;
   if (typeof state.claimedChairId === 'string' && state.claimedChairId.length > 0) return false;
@@ -792,14 +855,25 @@ export function canClaimChair(state, chairId) {
   const id = typeof state.playerId === 'string'
     ? state.playerId
     : (Number.isInteger(state.playerIndex) ? playerKey(state.playerIndex) : null);
-  if (!id) return false;
+  if (!isValidWinnerId(id)) return false;
 
-  const active = Array.isArray(state.activePlayerIds) ? state.activePlayerIds : [];
+  const active = uniqueIds(state.activePlayerIds);
   if (!active.includes(id)) return false;
+  if (!chairIds(chairCountFor(active)).includes(chairId)) return false;
 
-  const chairs = normalizeChairs(state.chairs);
-  if (chairs[chairId]) return false;            // chair already taken locally
-  if (chairOf(chairs, id) !== null) return false; // this player already sat down
+  const player = state.players && typeof state.players === 'object' ? state.players[id] : null;
+  if (!player || player.connected !== true || player.eliminated !== false) return false;
+
+  const context = {
+    schemaVersion: state.schemaVersion ?? 2,
+    round: state.round,
+    phase: state.phase,
+    activePlayerIds: active,
+    players: state.players,
+  };
+  const chairs = normalizeChairs(state.chairs, context);
+  if (chairs[chairId]) return false;                 // chair already taken locally
+  if (chairOf(chairs, id, context) !== null) return false; // this player already sat down
 
   return true;
 }
@@ -821,8 +895,8 @@ export function canClaimChair(state, chairId) {
  *   releasedChairIds: string[] }} Cleaned map plus the chairs that were released
  *   (in seating order)
  */
-export function resolveDuplicateClaims(chairs) {
-  const normalized = normalizeChairs(chairs);
+export function resolveDuplicateClaims(chairs, options = {}) {
+  const normalized = normalizeChairs(chairs, options);
   const order = sortedChairIds(normalized);
 
   /** playerId → chairId currently winning. */
@@ -901,7 +975,13 @@ export async function claimChair(roomCode, chairId, playerIndex, options = {}) {
   }
 
   const playerId = playerKey(index);
-  if (options.force !== true && !canClaimChair({ ...state, playerIndex: index, playerId }, chairId)) {
+  const round = state.round;
+  const claimState = { ...state, playerIndex: index, playerId };
+  if (options.force === true) {
+    claimState.hasLocalPlayerClaimed = false;
+    claimState.claimedChairId = null;
+  }
+  if (!canClaimChair(claimState, chairId)) {
     return { ok: false, claimed: false, reason: 'claim-not-allowed', chairId };
   }
 
@@ -910,9 +990,11 @@ export async function claimChair(roomCode, chairId, playerIndex, options = {}) {
   state.claimedChairId = chairId;
 
   const claimedAt = await resolveServerTimestamp(options);
+  const claimRecord = { playerId, claimedAt };
+  if ((state.schemaVersion ?? 2) !== 1) claimRecord.round = round;
   const updates = {
-    [roomPath(roomCode, `chairs/${chairId}`)]: { playerId, claimedAt },
-    [roomPath(roomCode, 'meta/lastActivity')]: Date.now(),
+    [roomPath(roomCode, `chairs/${chairId}`)]: claimRecord,
+    [roomPath(roomCode, 'meta/lastActivity')]: claimedAt,
   };
 
   // A rules rejection is converted into a resolved sentinel so it never reaches
@@ -988,19 +1070,27 @@ export async function claimChair(roomCode, chairId, playerIndex, options = {}) {
  * }} `seated` / `unseated` both follow `activePlayerIds` order
  */
 export function determineElimination(chairs, activePlayerIds, options = {}) {
-  const ids = uniqueIds(activePlayerIds);
+  const ids = uniqueIds(activePlayerIds).filter(isValidWinnerId);
   if (ids.length === 0) {
-    return { eliminatedPlayerIds: [], reason: 'no-active-players', seated: [], unseated: [] };
+    return {
+      eliminatedPlayerIds: [], reason: 'no-active-players', seated: [], unseated: [], chairs: {},
+    };
   }
 
-  const { chairs: cleaned } = resolveDuplicateClaims(chairs);
-  const players = options.players && typeof options.players === 'object' ? options.players : null;
+  const players = options.players && typeof options.players === 'object' ? options.players : {};
+  const context = {
+    round: options.round,
+    phase: options.phase,
+    activePlayerIds: ids,
+    players,
+  };
+  const { chairs: cleaned } = resolveDuplicateClaims(chairs, context);
+  const seatedSet = new Set(seatedPlayerIds(cleaned, context));
 
   const seated = [];
   const unseated = [];
   for (const id of ids) {
-    const disconnected = Boolean(players && players[id] && players[id].connected === false);
-    if (!disconnected && chairOf(cleaned, id) !== null) seated.push(id);
+    if (seatedSet.has(id)) seated.push(id);
     else unseated.push(id);
   }
 
@@ -1009,6 +1099,7 @@ export function determineElimination(chairs, activePlayerIds, options = {}) {
     reason: unseated.length > 0 ? 'unseated' : 'all-seated',
     seated,
     unseated,
+    chairs: cleaned,
   };
 }
 
@@ -1249,6 +1340,40 @@ export function computeFinalRankings(eliminationOrder, options = {}) {
 }
 
 /**
+ * Projects rankings to the exact root-level schema accepted by schema v2.
+ * Extra fields and malformed rows are dropped. The winner intentionally omits
+ * `eliminatedInRound`; RTDB also removes that child when older callers send it
+ * as null.
+ *
+ * @param {unknown} rankings - Candidate root `rankings` array
+ * @param {{ winnerId?: string }} [options]
+ * @returns {Array<{playerId: string, name: string, rank: number, eliminatedInRound?: number}>}
+ */
+export function toFirebaseRankings(rankings, options = {}) {
+  if (!Array.isArray(rankings)) return [];
+  const winnerId = isValidWinnerId(options.winnerId) ? options.winnerId : null;
+  const seen = new Set();
+  const projected = [];
+
+  for (const entry of rankings) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    if (!isValidWinnerId(entry.playerId) || seen.has(entry.playerId)) continue;
+    if (typeof entry.name !== 'string' || entry.name.length === 0) continue;
+    if (!Number.isInteger(entry.rank) || entry.rank < 1) continue;
+
+    const row = { playerId: entry.playerId, name: entry.name, rank: entry.rank };
+    if (entry.playerId !== winnerId) {
+      if (!Number.isInteger(entry.eliminatedInRound) || entry.eliminatedInRound < 1) continue;
+      row.eliminatedInRound = entry.eliminatedInRound;
+    }
+    projected.push(row);
+    seen.add(entry.playerId);
+  }
+
+  return projected;
+}
+
+/**
  * HOST ONLY. Persists the victory state and the final rankings (Req 10.1, 10.2,
  * 10.5). `game` and `rankings` are both host-writable only under the deployed
  * rules, and `winnerId` must match `player_[0-7]` — an invalid ID is dropped
@@ -1266,15 +1391,18 @@ export function computeFinalRankings(eliminationOrder, options = {}) {
 export async function persistVictory(roomCode, options = {}) {
   if (!isHostWriter(options)) return { ok: false, skipped: 'not-host' };
 
+  const activityAt = await resolveServerTimestamp(options);
   const updates = {
     [roomPath(roomCode, 'game/phase')]: PHASES.VICTORY,
-    [roomPath(roomCode, 'meta/lastActivity')]: Date.now(),
+    [roomPath(roomCode, 'meta/lastActivity')]: activityAt,
   };
   if (isValidWinnerId(options.winnerId)) {
     updates[roomPath(roomCode, 'game/winnerId')] = options.winnerId;
   }
   if (Array.isArray(options.rankings)) {
-    updates[roomPath(roomCode, 'rankings')] = options.rankings;
+    updates[roomPath(roomCode, 'rankings')] = toFirebaseRankings(options.rankings, {
+      winnerId: options.winnerId,
+    });
   }
 
   const result = await withRetry(() => applyUpdates(updates, options), {
@@ -1401,8 +1529,12 @@ export function resolveClaimPhase(state, options = {}) {
   const chairs = options.chairs !== undefined ? options.chairs : base.chairs;
   const players = options.players !== undefined ? options.players : base.players;
 
-  const decision = determineElimination(chairs, base.activePlayerIds, { players });
-  const nextState = applyElimination(base, decision.eliminatedPlayerIds);
+  const decision = determineElimination(chairs, base.activePlayerIds, {
+    round: base.round,
+    phase: base.phase,
+    players,
+  });
+  const nextState = applyElimination({ ...base, chairs: decision.chairs }, decision.eliminatedPlayerIds);
   const remaining = nextState.activePlayerIds;
   const winnerId = checkVictory(remaining);
 
@@ -1438,12 +1570,16 @@ export async function writeEliminationResult(roomCode, resolution, options = {})
 
   const eliminated = uniqueIds(resolution?.eliminatedPlayerIds);
   const nextState = resolution?.nextState || {};
+  const activityAt = await resolveServerTimestamp(options);
 
   const updates = {
     [roomPath(roomCode, 'game/phase')]: PHASES.ELIMINATION,
+    [roomPath(roomCode, 'game/round')]: Number.isInteger(nextState.round) && nextState.round >= 1
+      ? nextState.round
+      : 1,
     [roomPath(roomCode, 'game/activePlayerIds')]: uniqueIds(nextState.activePlayerIds),
     [roomPath(roomCode, 'game/eliminatedThisRound')]: eliminated.length ? eliminated : null,
-    [roomPath(roomCode, 'meta/lastActivity')]: Date.now(),
+    [roomPath(roomCode, 'meta/lastActivity')]: activityAt,
   };
   for (const id of eliminated) {
     updates[roomPath(roomCode, `players/${id}/eliminated`)] = true;

@@ -110,8 +110,11 @@ import {
   startGame,
   endGame,
   setupDisconnectHandler,
+  restoreConnection,
+  deleteRoomAfterHostLossGrace,
   removePlayer,
   deleteRoom,
+  HOST_LOSS_GRACE_MS,
   PLAYER_AVATARS,
 } from './firebase-sync.js';
 
@@ -140,6 +143,7 @@ import {
   chairCountFor,
   chairIds,
   isValidChairId,
+  normalizeChairs,
   seatedPlayerIds,
   chairOf,
   resolveDuplicateClaims,
@@ -228,11 +232,25 @@ const teardownCallbacks = [];
 let unsubscribeRoom = null;
 
 /** Latest Firebase snapshots, mirrored so any renderer can read them (6.3/6.4). */
+let currentMeta = {};
 let currentPlayers = {};
-/** `chairs` node mirror: chairId → { playerId, claimedAt } (drag-to-claim). */
+/** Raw `chairs` snapshot retained because listener callbacks precede game updates. */
+let currentChairsSnapshot = {};
+/** Current-round, schema-valid chairs only. */
 let currentChairs = {};
+/** Root-level rankings are authoritative; rankings never live under `game`. */
+let currentRankings = [];
 let currentGame = null;
 let currentRoomStatus = 'lobby';
+
+/** Cancellable onDisconnect registration, including registrations still awaiting setup. */
+let disconnectRegistration = null;
+let disconnectRegistrationGeneration = 0;
+
+/** Exact host-loss generation watched by a non-host before deleting the room. */
+let hostLossTimer = null;
+let hostLossMarker = null;
+let hostLossDeletionLatched = false;
 
 /** True while a leave is in flight, so late Firebase events are ignored (6.3). */
 let leavingRoom = false;
@@ -334,8 +352,12 @@ let syncOverlayMessage = null;
 /** The Refresh button injected into `.loading-content` past the 10s stall mark. */
 let refreshActionButton = null;
 
-/** Teardown for the click handler on the actionable update toast (SECTION 14). */
+/** Teardown for the action handlers on the update toast (SECTION 14). */
 let updateToastCleanup = null;
+/** Installed worker held in `waiting` until the player explicitly updates. */
+let waitingServiceWorker = null;
+/** Reload on controller change only when this page requested the activation. */
+let updateActivationRequested = false;
 
 // ═════════════════════════════════════════════════════════════════════════════
 // SECTION 4 — SCREEN NAVIGATION + UI HELPERS
@@ -794,9 +816,8 @@ const ROOM_FULL_MESSAGE = `Room is full (${MAX_PLAYERS} players maximum)`;
 /** Shared eight-avatar palette used by persistence and both pickers. */
 const AVATARS = PLAYER_AVATARS;
 
-/** Chair glyphs for the seat a player holds / has lost (Req 14.1). */
+/** Chair glyph retained for lobby player rows (Req 14.1). */
 const CHAIR_GLYPH = '🪑';
-const CHAIR_LOST_GLYPH = '💥';
 
 /** `.player-card.eliminating` keyframe length in style.css (Req 8.1: ≥2000ms). */
 const ELIMINATION_ANIMATION_MS = 2200;
@@ -812,12 +833,17 @@ const LOBBY_PRUNE_DELAY_MS = 2500;
  * pre-join capacity read. Dynamic so a bare import of main.js in jsdom stays
  * side-effect free, mirroring the pattern in game-manager.js.
  *
- * @returns {Promise<{ref: Function, get: Function, update: Function}>}
+ * @returns {Promise<{ref: Function, get: Function, update: Function, serverTimestamp: Function}>}
  */
 async function loadRtdb() {
   if (rtdbModule) return rtdbModule;
   const rtdb = await import('firebase/database');
-  rtdbModule = { ref: rtdb.ref, get: rtdb.get, update: rtdb.update };
+  rtdbModule = {
+    ref: rtdb.ref,
+    get: rtdb.get,
+    update: rtdb.update,
+    serverTimestamp: rtdb.serverTimestamp,
+  };
   return rtdbModule;
 }
 
@@ -1082,7 +1108,11 @@ async function refreshJoinAvatarAvailability() {
  * @param {{roomCode: string, playerIndex: number, isHost: boolean, playerName: string}} entry
  */
 async function afterRoomEntry({ roomCode, playerIndex, isHost, playerName }) {
+  clearRoomLifecycleTimers();
   leavingRoom = false;
+  currentMeta = {};
+  currentRankings = [];
+  currentChairsSnapshot = {};
   gameState.roomCode = roomCode;
   gameState.playerIndex = playerIndex;
   gameState.isHost = isHost;
@@ -1093,8 +1123,8 @@ async function afterRoomEntry({ roomCode, playerIndex, isHost, playerName }) {
   gameState.claimedChairId = null;
   resetRoundViewState();
 
-  // Req 12.5 — register the onDisconnect handler immediately after entry.
-  attachDisconnectHandler();
+  // Req 12.5 — retain the cancellable onDisconnect registration immediately after entry.
+  await attachDisconnectHandler();
 
   // Req 11.8 / 20.3 — session persistence for auto-rejoin (task 7.x consumes it).
   if (!saveSession({ roomCode, playerIndex, isHost, playerName })) {
@@ -1107,14 +1137,48 @@ async function afterRoomEntry({ roomCode, playerIndex, isHost, playerName }) {
   renderLobby();
 }
 
-/** Register `onDisconnect` for the local player (Req 11.1, 11.2, 12.5). */
-export function attachDisconnectHandler() {
-  const { roomCode, playerIndex } = gameState;
-  if (!roomCode || !Number.isInteger(playerIndex)) return;
+/** Cancel the retained registration and invalidate any setup still in flight. */
+async function cancelDisconnectHandlerRegistration() {
+  disconnectRegistrationGeneration += 1;
+  const registration = disconnectRegistration;
+  disconnectRegistration = null;
+  if (!registration || typeof registration.cancel !== 'function') return;
   try {
-    setupDisconnectHandler(roomCode, playerIndex);
+    await registration.cancel();
+  } catch (error) {
+    logError('cancelDisconnectHandler', error, { roomCode: gameState.roomCode });
+  }
+}
+
+/** Register and retain `onDisconnect` for the local player. */
+export async function attachDisconnectHandler() {
+  const { roomCode, playerIndex } = gameState;
+  if (!roomCode || !Number.isInteger(playerIndex) || leavingRoom) return null;
+
+  const generation = ++disconnectRegistrationGeneration;
+  const previous = disconnectRegistration;
+  disconnectRegistration = null;
+  if (previous && typeof previous.cancel === 'function') {
+    try { await previous.cancel(); } catch (error) {
+      logError('replaceDisconnectHandler', error, { roomCode, playerIndex });
+    }
+  }
+
+  try {
+    const registration = await setupDisconnectHandler(roomCode, playerIndex);
+    const stale = generation !== disconnectRegistrationGeneration
+      || leavingRoom
+      || gameState.roomCode !== roomCode
+      || gameState.playerIndex !== playerIndex;
+    if (stale) {
+      try { await registration?.cancel?.(); } catch (_) {}
+      return null;
+    }
+    disconnectRegistration = registration;
+    return registration;
   } catch (error) {
     logError('attachDisconnectHandler', error, { roomCode, playerIndex });
+    return null;
   }
 }
 
@@ -1196,10 +1260,9 @@ export async function handleJoinRoom(event) {
       const exists = snapshot && typeof snapshot.exists === 'function' && snapshot.exists();
       if (!exists) throw new Error(ROOM_NOT_FOUND_MESSAGE);
       const room = snapshot.val() || {};
-      // Req 17.3 — an abandoned room reads exactly like a deleted one, and a
-      // room the rules have already frozen is reaped on the way past (§13).
+      // Malformed or abandoned rooms fail closed. Only the host or the
+      // marker-gated host-loss transaction may delete a room.
       if (isRoomAbandoned(room)) {
-        reapUnusableRoom(code, room).catch(() => {});
         throw new Error(ROOM_NOT_FOUND_MESSAGE);
       }
       if (isRoomFull(room.players)) throw new Error(ROOM_FULL_MESSAGE);
@@ -1244,24 +1307,125 @@ function joinErrorMessage(error) {
 
 /* ------------------------------ room listener ----------------------------- */
 
+/** True while the authoritative host-loss generation is active. */
+function isHostLossActive() {
+  return Number.isFinite(currentMeta?.hostDisconnectedAt);
+}
+
+function clearHostLossTimer() {
+  if (hostLossTimer !== null) {
+    clearTimeout(hostLossTimer);
+    hostLossTimer = null;
+  }
+}
+
+/** Watch one exact host-loss generation; no client ever promotes a new host. */
+function scheduleHostLossCleanup() {
+  const marker = Number.isFinite(currentMeta?.hostDisconnectedAt)
+    ? currentMeta.hostDisconnectedAt
+    : null;
+
+  if (marker !== hostLossMarker) {
+    clearHostLossTimer();
+    hostLossMarker = marker;
+    hostLossDeletionLatched = false;
+  }
+  if (marker === null || gameState.isHost || leavingRoom || hostLossDeletionLatched) {
+    clearHostLossTimer();
+    return;
+  }
+  if (hostLossTimer !== null || !gameState.roomCode || !Number.isInteger(gameState.playerIndex)) return;
+
+  const roomCode = gameState.roomCode;
+  const playerIndex = gameState.playerIndex;
+  const delay = Math.max(0, HOST_LOSS_GRACE_MS - (Date.now() - marker));
+  hostLossTimer = setTimeout(async () => {
+    hostLossTimer = null;
+    if (leavingRoom
+      || gameState.isHost
+      || gameState.roomCode !== roomCode
+      || gameState.playerIndex !== playerIndex
+      || currentMeta?.hostDisconnectedAt !== marker
+      || hostLossDeletionLatched) return;
+
+    const now = Date.now();
+    if (now - marker < HOST_LOSS_GRACE_MS) {
+      scheduleHostLossCleanup();
+      return;
+    }
+
+    hostLossDeletionLatched = true;
+    try {
+      await deleteRoomAfterHostLossGrace(roomCode, marker, playerIndex, now);
+    } catch (error) {
+      logError('deleteRoomAfterHostLossGrace', error, { roomCode, marker, playerIndex });
+    }
+  }, delay);
+}
+
+function handleMetaUpdate(meta) {
+  if (leavingRoom) return;
+  if (!meta || typeof meta !== 'object' || Array.isArray(meta)) {
+    handleRoomListenerError(new Error('Invalid room metadata'));
+    return;
+  }
+  const marker = meta.hostDisconnectedAt;
+  if (marker !== undefined && marker !== null && !Number.isFinite(marker)) {
+    handleRoomListenerError(new Error('Invalid host disconnect marker'));
+    return;
+  }
+
+  const wasBlocked = isHostLossActive();
+  currentMeta = { ...meta };
+  gameState.schemaVersion = meta.schemaVersion === 2 ? 2 : 1;
+  scheduleHostLossCleanup();
+  updateStartButtonState(currentPlayers);
+  if (getCurrentScreen() === SCREENS.VICTORY) renderVictoryContent();
+
+  // A recovered host may have watched its old phase timer expire while blocked.
+  // Re-entering the phase after the atomic marker clear safely re-arms it.
+  if (wasBlocked && !isHostLossActive() && gameState.isHost && currentGame) {
+    renderedPhase = null;
+    updateGameFromFirebase(currentGame);
+  }
+}
+
+function handleRankingsUpdate(rankings) {
+  if (leavingRoom) return;
+  if (!Array.isArray(rankings)) {
+    handleRoomListenerError(new Error('Invalid rankings snapshot'));
+    return;
+  }
+  currentRankings = rankings;
+  if (getCurrentScreen() === SCREENS.VICTORY) renderVictoryContent();
+}
+
+function handleRoomListenerError(error) {
+  if (leavingRoom) return;
+  failToMenu('This room data is not supported', error, 'listenRoomSchema');
+}
+
 /**
  * Attach the single real-time listener for the room (Req 12.1, 12.2, 12.4).
- * `listenRoom` fires status → players → chairs → game on every snapshot, so the
- * mirrors are always fresh before {@link updateGameFromFirebase} renders.
+ * `listenRoom` delivers metadata and root rankings independently of `game`.
  *
  * @param {string} roomCode
  */
 function startRoomListener(roomCode) {
   stopRoomListener();
+  clearRoomLifecycleTimers();
   unsubscribeRoom = listenRoom(roomCode, {
+    onMetaChange: handleMetaUpdate,
     onStatusChange: (status) => { currentRoomStatus = status || 'lobby'; },
     onPlayersChange: handlePlayersUpdate,
     onChairsChange: handleChairsUpdate,
+    onRankingsChange: handleRankingsUpdate,
     onGameUpdate: (game, status) => {
       currentRoomStatus = status || currentRoomStatus;
       updateGameFromFirebase(game);
     },
     onRoomDeleted: handleRoomDeleted,
+    onError: handleRoomListenerError,
   });
 }
 
@@ -1357,6 +1521,7 @@ function handlePlayersUpdate(players) {
   if (leavingRoom) return;
   currentPlayers = players && typeof players === 'object' ? players : {};
   gameState.players = currentPlayers;
+  syncCurrentRoundChairs();
   trackDisconnections(currentPlayers);
   // Task 7.3 / 8.3 — connection reactions and the abandoned-room marker (§13).
   handleDisconnectedPlayers(currentPlayers);
@@ -1499,15 +1664,17 @@ export function updateStartButtonState(players) {
     return;
   }
 
-  const ready = hasEnoughPlayers(players);
+  const ready = hasEnoughPlayers(players) && !isHostLossActive();
   if (button) {
     button.removeAttribute('hidden');
     button.disabled = !ready;
   }
   if (hint) {
-    hint.textContent = ready
-      ? 'Everyone in? Start the game.'
-      : `Need at least ${MIN_PLAYERS} connected players to start.`;
+    hint.textContent = isHostLossActive()
+      ? 'Waiting for the host connection to recover.'
+      : (ready
+        ? 'Everyone in? Start the game.'
+        : `Need at least ${MIN_PLAYERS} connected players to start.`);
   }
 }
 
@@ -1521,7 +1688,7 @@ export function updateStartButtonState(players) {
  * must never be written there. Both land well inside the 2 second budget.
  */
 export async function handleStartGame() {
-  if (!gameState.isHost || !gameState.roomCode) return;
+  if (!gameState.isHost || !gameState.roomCode || isHostLossActive()) return;
 
   const activePlayerIds = connectedPlayerIds(currentPlayers);
   if (activePlayerIds.length < MIN_PLAYERS) {
@@ -1558,6 +1725,10 @@ export async function handleStartGame() {
   gameState.round = 1;
   gameState.activePlayerIds = activePlayerIds;
 
+  if (isHostLossActive()) {
+    hideLoading();
+    return;
+  }
   const result = await startMusicPhase(gameState.roomCode, { round: 1, activePlayerIds });
   hideLoading();
   if (!result.ok && !result.skipped) {
@@ -1579,9 +1750,8 @@ export async function handleLeaveLobby() {
 function teardownRoom({ keepSession = false } = {}) {
   leavingRoom = true;
   stopRoomListener();
-  clearAllGameTimers();
-  clearGameplayTimers();
-  clearRecoveryTimers();
+  cancelDisconnectHandlerRegistration().catch(() => {});
+  clearRoomLifecycleTimers();
   try { stopMusic(); } catch (_) {}
   if (!keepSession) {
     clearSession();
@@ -1590,10 +1760,15 @@ function teardownRoom({ keepSession = false } = {}) {
 
   endDrag({ reason: 'leave-room' });
   renderedStageSignature = null;
+  currentMeta = {};
   currentPlayers = {};
+  currentChairsSnapshot = {};
   currentChairs = {};
+  currentRankings = [];
   currentGame = null;
   currentRoomStatus = 'lobby';
+  hostLossMarker = null;
+  hostLossDeletionLatched = false;
   disconnectedSince = {};
   eliminationHistory = [];
   roomAbandoned = false;
@@ -1608,22 +1783,22 @@ function teardownRoom({ keepSession = false } = {}) {
  * (Req 15.x "Return to Menu", 17.4).
  */
 async function leaveRoom() {
-  const { roomCode, playerIndex } = gameState;
+  const { roomCode, playerIndex, isHost } = gameState;
   const hadPlayer = Boolean(roomCode) && Number.isInteger(playerIndex);
   leavingRoom = true;
   stopRoomListener();
+  clearRoomLifecycleTimers();
 
+  // Intentional leave must disarm the queued disconnect write before changing
+  // room state. A host closes the room immediately; guests remove only self.
+  await cancelDisconnectHandlerRegistration();
   if (hadPlayer) {
     try {
-      // Req 17.4 — an intentional leave removes the player record outright,
-      // rather than only flipping `connected` the way a disconnect does.
-      await removePlayer(roomCode, playerIndex);
+      if (isHost) await deleteRoom(roomCode);
+      else await removePlayer(roomCode, playerIndex);
     } catch (error) {
-      // A failed removal is not fatal: onDisconnect still flips `connected`.
-      logError('leaveRoom', error, { roomCode, playerIndex });
+      logError('leaveRoom', error, { roomCode, playerIndex, isHost });
     }
-    // Req 17.1 / 17.3 — the last player out closes the room (see SECTION 13).
-    await releaseRoomOnLeave(roomCode, playerIndex);
   }
 
   teardownRoom();
@@ -1727,6 +1902,37 @@ function localPlayerId() {
   return Number.isInteger(gameState.playerIndex) ? playerKey(gameState.playerIndex) : null;
 }
 
+/** Authoritative context required to reject stale or malformed chair claims. */
+function currentChairContext(players = currentPlayers) {
+  return {
+    schemaVersion: currentMeta?.schemaVersion === 2 ? 2 : 1,
+    round: gameState.round,
+    phase: gameState.phase,
+    activePlayerIds: gameState.activePlayerIds,
+    players,
+  };
+}
+
+/** Re-project the latest raw chairs snapshot onto the current round. */
+function syncCurrentRoundChairs() {
+  const context = currentChairContext();
+  currentChairs = normalizeChairs(currentChairsSnapshot, context);
+  gameState.chairs = currentChairs;
+
+  const localId = localPlayerId();
+  const myChairId = localId ? chairOf(currentChairs, localId, context) : null;
+  if (myChairId) {
+    isClaimRecorded = true;
+    gameState.hasLocalPlayerClaimed = true;
+    gameState.claimedChairId = myChairId;
+    endDrag({ reason: 'seated' });
+  }
+  Object.entries(currentChairs).forEach(([chairId, record]) => {
+    if (record.playerId !== localId) blockedChairIds.add(chairId);
+  });
+  return currentChairs;
+}
+
 /**
  * Whether the local player is out of the game (Req 6.2, spectator view).
  * @returns {boolean}
@@ -1743,7 +1949,7 @@ function isLocalPlayerEliminated() {
 /* --------------------------- stage geometry ------------------------------- */
 
 /** Fallbacks matching the `.stage` defaults in style.css §12b. */
-const DEFAULT_CHAIR_RADIUS = 26;
+const DEFAULT_CHAIR_RADIUS = 23;
 const DEFAULT_ORBIT_RADIUS = 39;
 
 /**
@@ -1800,6 +2006,14 @@ function clearGameplayTimers() {
   rejectTimers.clear();
 }
 
+/** Cancel host-loss, reconnect-grace, and game timers on lifecycle boundaries. */
+function clearRoomLifecycleTimers() {
+  clearHostLossTimer();
+  clearAllGameTimers();
+  clearGameplayTimers();
+  clearRecoveryTimers();
+}
+
 /**
  * THE single entry point for game state changes (Req 12.2).
  * Every device runs this; only the host's branches write back to Firebase.
@@ -1834,6 +2048,7 @@ export function updateGameFromFirebase(gameData) {
     gameState.claimedChairId = null;
     endDrag({ reason: 'new-round' });
   }
+  syncCurrentRoundChairs();
 
   routeToRoomState();
   if (getCurrentScreen() !== SCREENS.GAME) {
@@ -1943,7 +2158,7 @@ function renderMusicPhase(gameData) {
   // on screen tracks the remaining time any more.
   startMusicCountdown(duration, {
     onExpire: () => {
-      if (!gameState.isHost) return;
+      if (!gameState.isHost || isHostLossActive()) return;
       startClaimPhase(gameState.roomCode).then((result) => {
         if (!result.ok && !result.skipped) {
           showToast(result.message || 'Could not stop the music', true);
@@ -1982,7 +2197,7 @@ function renderClaimingPhase(gameData) {
 
   const id = localPlayerId();
   const active = Array.isArray(gameData.activePlayerIds) ? gameData.activePlayerIds : [];
-  const seatedChairId = id ? chairOf(currentChairs, id) : null;
+  const seatedChairId = id ? chairOf(currentChairs, id, currentChairContext()) : null;
   const canPlay = Boolean(id) && active.includes(id) && !isLocalPlayerEliminated();
 
   if (seatedChairId) {
@@ -2046,10 +2261,10 @@ function setMusicIndicatorVisible(visible) {
 }
 
 /**
- * Rebuild `#playerGrid` (Req 14.3, 14.4). Unchanged in structure — style.css
- * has demoted it to a compact strip under the stage (`.legacy-strip`).
- * Cards carry `.player-card` plus `.active` / `.seated` / `.eliminated` /
- * `.disconnected` / `.is-host` / `.is-you` / `.winner`.
+ * Rebuild `#playerGrid` as the compact gameplay roster (Req 14.3, 14.4).
+ * Each card contains only the player's avatar and truncated name. State is
+ * conveyed by `.active` / `.seated` / `.eliminated` / `.disconnected` /
+ * `.is-host` / `.is-you` / `.winner` visual classes.
  *
  * Skipped while the elimination animation runs: a rebuild would restart the
  * `.eliminating` keyframe (Req 8.1).
@@ -2065,7 +2280,7 @@ export function updatePlayerGrid(players = currentPlayers, chairs = currentChair
   const localId = localPlayerId();
   const active = Array.isArray(gameState.activePlayerIds) ? gameState.activePlayerIds : [];
   const winnerId = currentGame?.winnerId || null;
-  const seated = new Set(seatedPlayerIds(chairs));
+  const seated = new Set(seatedPlayerIds(chairs, currentChairContext(players)));
   const fragment = document.createDocumentFragment();
 
   sortedPlayerIds(players).forEach((id) => {
@@ -2086,28 +2301,13 @@ export function updatePlayerGrid(players = currentPlayers, chairs = currentChair
     card.dataset.playerId = id;
 
     card.appendChild(makeSpan('player-avatar', avatarFor(id, player), true));
-    card.appendChild(makeSpan('player-chair', eliminated ? CHAIR_LOST_GLYPH : CHAIR_GLYPH, true));
     card.appendChild(makeSpan('player-name', player.name || 'Player'));
-    card.appendChild(makeSpan('player-status', playerStatusText({ eliminated, seated: hasChair, player })));
 
     fragment.appendChild(card);
   });
 
   grid.replaceChildren(fragment);
   updateStagePlayerList();
-}
-
-/**
- * Short status pill text for a card.
- * @param {{eliminated: boolean, seated: boolean, player: Object}} state
- * @returns {string}
- */
-function playerStatusText({ eliminated, seated, player }) {
-  if (eliminated) return 'Out';
-  if (player?.connected === false) return 'Offline';
-  if (seated) return 'Seated';
-  if (gameState.phase === PHASES.CLAIMING) return 'Claiming…';
-  return 'In play';
 }
 
 /** Spectator view for eliminated players (Req 6.2, 8.x follow-along). */
@@ -2368,7 +2568,7 @@ function refreshStageState() {
   const spectators = stageSpectatorsEl();
   if (!stage || !chairsLayer || !orbit || !spectators) return;
 
-  const { chairs } = resolveDuplicateClaims(currentChairs);
+  const { chairs } = resolveDuplicateClaims(currentChairs, currentChairContext());
   const localId = localPlayerId();
   const active = activeStagePlayerIds();
 
@@ -2387,7 +2587,7 @@ function refreshStageState() {
     const playerId = actor.dataset.playerId;
     if (!playerId) return;
     const player = currentPlayers[playerId] || {};
-    const seatChairId = chairOf(chairs, playerId);
+    const seatChairId = chairOf(chairs, playerId, currentChairContext());
     const isDragging = Boolean(dragState && dragState.actor === actor);
 
     actor.classList.toggle('is-you', playerId === localId);
@@ -2428,14 +2628,14 @@ function updateStagePlayerList() {
   const list = document.getElementById('stagePlayerList');
   if (!list) return;
 
-  const { chairs } = resolveDuplicateClaims(currentChairs);
+  const { chairs } = resolveDuplicateClaims(currentChairs, currentChairContext());
   const localId = localPlayerId();
   const active = activeStagePlayerIds();
   const fragment = document.createDocumentFragment();
 
   sortedPlayerIds(currentPlayers).forEach((playerId) => {
     const player = currentPlayers[playerId] || {};
-    const seatChairId = chairOf(chairs, playerId);
+    const seatChairId = chairOf(chairs, playerId, currentChairContext());
     const tags = [];
     if (playerId === localId) tags.push('you');
     if (playerId === playerKey(0)) tags.push('host');
@@ -2851,43 +3051,24 @@ function bounceActor(actor) {
  */
 function handleChairsUpdate(chairs) {
   if (leavingRoom) return;
-  currentChairs = chairs && typeof chairs === 'object' ? chairs : {};
-  gameState.chairs = currentChairs;
-
-  const localId = localPlayerId();
-
-  // Re-sync the local latch from Firebase: covers a reconnect mid-claim-phase
-  // and a claim that landed before this device rendered the phase.
-  const myChairId = localId ? chairOf(currentChairs, localId) : null;
-  if (myChairId) {
-    isClaimRecorded = true;
-    gameState.hasLocalPlayerClaimed = true;
-    gameState.claimedChairId = myChairId;
-    endDrag({ reason: 'seated' });
-  }
-
-  // Chairs held by someone else can never be claimed by us again.
-  Object.entries(currentChairs).forEach(([chairId, record]) => {
-    if (record && typeof record.playerId === 'string' && record.playerId !== localId) {
-      blockedChairIds.add(chairId);
-    }
-  });
+  currentChairsSnapshot = chairs && typeof chairs === 'object' && !Array.isArray(chairs)
+    ? chairs
+    : {};
+  syncCurrentRoundChairs();
 
   if (getCurrentScreen() === SCREENS.GAME) {
     refreshStageState();
     updatePlayerGrid();
   }
 
-  // HOST ONLY: resolve as soon as EVERY CHAIR IS TAKEN (Req 7.1). With N-1
-  // chairs for N players that is the moment the round is decided — the loser is
-  // whoever is left standing.
-  if (!gameState.isHost || gameState.phase !== PHASES.CLAIMING) return;
+  // HOST ONLY: resolve once every valid current-round chair is occupied.
+  if (!gameState.isHost || isHostLossActive() || gameState.phase !== PHASES.CLAIMING) return;
   const active = Array.isArray(gameState.activePlayerIds) ? gameState.activePlayerIds : [];
   if (active.length === 0) return;
 
   const chairsThisRound = chairCountFor(active);
   if (chairsThisRound <= 0) return;
-  if (seatedPlayerIds(currentChairs).length >= chairsThisRound) {
+  if (seatedPlayerIds(currentChairs, currentChairContext()).length >= chairsThisRound) {
     resolveClaimPhaseAsHost('all-seated');
   }
 }
@@ -2900,7 +3081,7 @@ function handleChairsUpdate(chairs) {
  * @param {'all-seated'|'timeout'|string} reason
  */
 async function resolveClaimPhaseAsHost(reason) {
-  if (!gameState.isHost || claimPhaseResolving) return;
+  if (!gameState.isHost || isHostLossActive() || claimPhaseResolving) return;
   if (gameState.phase !== PHASES.CLAIMING) return;
 
   claimPhaseResolving = true;
@@ -3081,7 +3262,7 @@ export function unlockGameControls() {
  * (Req 8.5, 9.1, 9.2, 9.3).
  */
 async function advanceRoundIfHost() {
-  if (!gameState.isHost || !gameState.roomCode) return;
+  if (!gameState.isHost || !gameState.roomCode || isHostLossActive()) return;
   if (gameState.phase !== PHASES.ELIMINATION) return;
 
   const active = Array.isArray(gameState.activePlayerIds) ? [...gameState.activePlayerIds] : [];
@@ -3115,17 +3296,14 @@ async function advanceRoundIfHost() {
  * HOST ONLY. Persist the victory state and the final rankings
  * (Req 10.1, 10.2, 10.5).
  *
- * Three destinations, one purpose each:
- *   - `game/phase` + `game/winnerId` → what every device renders from.
- *   - `rankings` (top level)         → the durable record required by Req 10.5.
- *   - `game/rankings`                → the same list inside the `game` node,
- *     because `listenRoom` only surfaces meta/players/chairs/game, so a non-host
- *     would never see the top-level node.
+ * `persistVictory` atomically writes the strict game victory fields, root-level
+ * `rankings`, and a server-owned activity timestamp. Root rankings are the only
+ * ranking source consumed by the listener and victory UI.
  *
  * @param {string|null} winnerId
  */
 async function finishGameAsHost(winnerId) {
-  if (!gameState.isHost || !gameState.roomCode) return;
+  if (!gameState.isHost || !gameState.roomCode || isHostLossActive()) return;
   if (victoryPersisted) return;
   victoryPersisted = true;
 
@@ -3141,14 +3319,10 @@ async function finishGameAsHost(winnerId) {
     return;
   }
 
-  await applyRootUpdates({
-    [roomPath(gameState.roomCode, 'game/rankings')]: rankings,
-    [roomPath(gameState.roomCode, 'meta/lastActivity')]: Date.now(),
-  }, 'publishRankings');
-
   // The room is done. `finished` → `lobby` is legal for Play Again; only
   // `lobby` → `playing` is allowed in the other direction, which is why the
   // replay path below must go through `lobby`.
+  if (isHostLossActive()) return;
   try {
     await endGame(gameState.roomCode);
   } catch (error) {
@@ -3193,16 +3367,18 @@ function renderVictoryContent() {
   const name = document.getElementById('winnerName');
   if (name) name.textContent = winner?.name || (winnerId ? 'Player' : '—');
 
-  const rankings = Array.isArray(currentGame?.rankings) && currentGame.rankings.length
-    ? currentGame.rankings
-    : computeFinalRankings(eliminationHistory, { winnerId, players: currentPlayers });
-  renderRankings(rankings);
+  renderRankings(currentRankings);
 
   // Req 15.1 — Play Again is host-only.
   const playAgain = document.getElementById('playAgainBtn');
   if (playAgain) {
-    if (gameState.isHost) playAgain.removeAttribute('hidden');
-    else playAgain.setAttribute('hidden', '');
+    if (gameState.isHost) {
+      playAgain.removeAttribute('hidden');
+      playAgain.disabled = isHostLossActive();
+    } else {
+      playAgain.setAttribute('hidden', '');
+      playAgain.disabled = true;
+    }
   }
 }
 
@@ -3244,7 +3420,7 @@ export function renderRankings(rankings) {
  * player. Connected players stay exactly where they are (Req 15.6).
  */
 export async function handlePlayAgain() {
-  if (!gameState.isHost || !gameState.roomCode) return;
+  if (!gameState.isHost || !gameState.roomCode || isHostLossActive()) return;
 
   const button = document.getElementById('playAgainBtn');
   if (button) button.disabled = true;
@@ -3252,12 +3428,18 @@ export async function handlePlayAgain() {
 
   const roomCode = gameState.roomCode;
   const reset = resetGame(currentPlayers);
+  const { serverTimestamp } = await loadRtdb();
+  if (isHostLossActive()) {
+    hideLoading();
+    if (button) button.disabled = false;
+    return;
+  }
   const updates = {
     [roomPath(roomCode, 'meta/status')]: 'lobby',
     [roomPath(roomCode, 'game')]: toFirebaseGameState(reset),
     [roomPath(roomCode, 'chairs')]: null,
     [roomPath(roomCode, 'rankings')]: null,
-    [roomPath(roomCode, 'meta/lastActivity')]: Date.now(),
+    [roomPath(roomCode, 'meta/lastActivity')]: serverTimestamp(),
   };
   Object.keys(reset.players || {}).forEach((id) => {
     updates[roomPath(roomCode, `players/${id}/eliminated`)] = false;
@@ -3275,6 +3457,9 @@ export async function handlePlayAgain() {
   // Local view state; the Firebase snapshot routes everyone back to the lobby.
   eliminationHistory = [];
   resetRoundViewState();
+  currentRankings = [];
+  currentChairsSnapshot = {};
+  currentChairs = {};
   currentGame = null;
   currentRoomStatus = 'lobby';
   gameState.phase = PHASES.LOBBY;
@@ -3330,10 +3515,9 @@ function initGameplay() {
  */
 export function teardownGameplay() {
   stopRoomListener();
-  clearAllGameTimers();
+  cancelDisconnectHandlerRegistration().catch(() => {});
+  clearRoomLifecycleTimers();
   endDrag({ reason: 'teardown' });
-  clearGameplayTimers();
-  clearRecoveryTimers();
   unwireStageDrag();
   renderedStageSignature = null;
   try { stopMusic(); } catch (_) {}
@@ -3351,24 +3535,11 @@ if (document.readyState === 'loading') {
 // ═════════════════════════════════════════════════════════════════════════════
 // Requirements: 11.1 - 11.8, 16.4, 16.5, 17.1, 17.3, 17.4
 //
-// Storage lives in session.js (key `musical_chairs_session`, 24h expiry); this
-// section is only the wiring: rejoin on load, reactions to connection changes,
-// the stall watchdog, and what little room cleanup a client is allowed to do.
-//
-// WHAT THE DEPLOYED RULES ALLOW A CLIENT TO DO HERE
-//   - `players/player_N/connected = true`  → own node, permitted for every
-//     player (host or not). This is the reconnect write (Req 11.3).
-//   - `meta/lastActivity`                  → any authenticated client, as long
-//     as the room is not already idle past 24h.
-//   - `meta/status`                        → HOST ONLY, and the only legal
-//     values are lobby / playing / finished. There is no 'abandoned' value and
-//     no writable `meta/abandonedAt`, so Req 17.1 is a LOCAL marker plus the
-//     absence of further `lastActivity` writes; see {@link isRoomAbandoned}.
-//   - removing a room                      → the host at any time, or ANY
-//     authenticated client once `meta/lastActivity` is older than 24h. That
-//     reap-on-encounter is the closest thing to scheduled deletion that
-//     Realtime Database offers (Req 17.2 is a rules-side concern, not a client
-//     one — see {@link reapUnusableRoom}).
+// Storage lives in session.js (key `musical_chairs_session`, 24h expiry). This
+// section wires rejoin, connection recovery, the stall watchdog, and the strict
+// room lifecycle: immediate host deletion or marker-gated 30-second host-loss
+// deletion only. There is no client authority to reap a room merely because its
+// last activity is old.
 
 /* ------------------------------- constants -------------------------------- */
 
@@ -3390,10 +3561,7 @@ const STALL_POLL_MS = 500;
 /** Exact copy from design §Timing and Synchronization Errors. */
 const SYNCING_MESSAGE = 'Syncing game state...';
 
-/** Rooms idle past this are write-denied by the rules and removable by anyone. */
-const ROOM_IDLE_LIMIT_MS = 24 * 60 * 60 * 1000;
-
-/** Zero connected players plus this much silence reads as abandoned (Req 17.1). */
+/** Zero connected players plus this much silence reads as abandoned locally. */
 const ROOM_ABANDONED_IDLE_MS = 60 * 1000;
 
 /** Longer dwell for the "reconnected" confirmation than a routine toast. */
@@ -3433,115 +3601,22 @@ function roomLastActivity(room) {
 }
 
 /**
- * Whether the rules have already frozen this room: idle past 24h (every write
- * returns PERMISSION_DENIED) or missing its activity stamp entirely.
- *
- * @param {Object|null|undefined} room - Room snapshot value
- * @returns {boolean}
+ * Missing lifecycle metadata is malformed and therefore unusable. Age alone is
+ * never deletion authority and does not make an otherwise valid room unusable.
  */
 function isRoomUnusable(room) {
-  if (!room || typeof room !== 'object') return true;
-  const lastActivity = roomLastActivity(room);
-  if (lastActivity === null) return true;
-  return Date.now() - lastActivity > ROOM_IDLE_LIMIT_MS;
+  return !room || typeof room !== 'object' || roomLastActivity(room) === null;
 }
 
 /**
- * Whether a room should be treated as abandoned by someone trying to JOIN it
- * (Req 17.1, 17.3): frozen by the rules, or nobody connected and nothing
- * written for a full minute.
- *
- * The minute of silence matters. A room whose only player just refreshed reads
- * "zero connected" for a second or two — reaping on that alone would break the
- * very rejoin flow this section implements, which is why {@link attemptAutoRejoin}
- * checks {@link isRoomUnusable} instead.
- *
- * @param {Object|null|undefined} room - Room snapshot value
- * @returns {boolean}
+ * Treat malformed rooms, or rooms with no connected players and a full minute
+ * of silence, as unavailable to a new joiner. This is a local fail-closed read;
+ * it never attempts deletion.
  */
 export function isRoomAbandoned(room) {
   if (isRoomUnusable(room)) return true;
   if (connectedPlayerIds(room.players).length > 0) return false;
   return Date.now() - roomLastActivity(room) > ROOM_ABANDONED_IDLE_MS;
-}
-
-/**
- * Best-effort removal of a room the rules consider dead. Any authenticated
- * client may delete a room idle past 24h, so every client that stumbles over
- * one cleans it up — Realtime Database cannot delete on a schedule.
- *
- * Never throws and never blocks a caller: fire and forget.
- *
- * @param {string} roomCode
- * @param {Object} room - Room snapshot value
- * @returns {Promise<boolean>} true when the delete landed
- */
-async function reapUnusableRoom(roomCode, room) {
-  if (!roomCode || !isRoomUnusable(room)) return false;
-  try {
-    await deleteRoom(roomCode);
-    console.warn(`[ui] removed idle room ${roomCode} (last activity ${roomLastActivity(room)})`);
-    return true;
-  } catch (error) {
-    // Another client usually wins this race; that is a success for us.
-    logError('reapUnusableRoom', error, { roomCode });
-    return false;
-  }
-}
-
-/**
- * Stamp `meta/lastActivity` (Req 17.1 — "on every action"). Writable by any
- * authenticated client while the room is live, which is what lets a non-host
- * keep the room from ageing out.
- *
- * @param {string} [roomCode=gameState.roomCode]
- * @returns {Promise<{ok: boolean}>}
- */
-async function touchLastActivity(roomCode = gameState.roomCode) {
-  if (!roomCode) return { ok: false };
-  return applyRootUpdates(
-    { [roomPath(roomCode, 'meta/lastActivity')]: Date.now() },
-    'touchLastActivity',
-  );
-}
-
-/**
- * Close the room behind an intentional leave (Req 17.1, 17.3, 17.4).
- *
- * Three outcomes, in order:
- *   1. Someone else is still connected → refresh `lastActivity` and leave the
- *      room alone.
- *   2. Nobody is left and we are the HOST → delete the room, so a later join
- *      gets "Room not found" immediately instead of in 24 hours.
- *   3. Nobody is left and we are NOT the host → nothing is permitted. The room
- *      stops receiving `lastActivity` writes and ages out (see the section
- *      header). This is the documented limitation of client-side cleanup.
- *
- * @param {string} [roomCode=gameState.roomCode]
- * @param {number} [playerIndex=gameState.playerIndex]
- * @returns {Promise<boolean>} true when the room was deleted
- */
-async function releaseRoomOnLeave(roomCode = gameState.roomCode, playerIndex = gameState.playerIndex) {
-  if (!roomCode) return false;
-
-  const localId = Number.isInteger(playerIndex) ? playerKey(playerIndex) : null;
-  const others = connectedPlayerIds(currentPlayers).filter((id) => id !== localId);
-  if (others.length > 0) {
-    await touchLastActivity(roomCode);
-    return false;
-  }
-
-  if (!gameState.isHost) return false;
-  // Offline, the delete would queue and could land after players rejoined.
-  if (!isOnline()) return false;
-
-  try {
-    await deleteRoom(roomCode);
-    return true;
-  } catch (error) {
-    logError('releaseRoomOnLeave', error, { roomCode });
-    return false;
-  }
 }
 
 /* ------------------------- task 7.2: auto-rejoin -------------------------- */
@@ -3553,10 +3628,9 @@ async function releaseRoomOnLeave(roomCode = gameState.roomCode, playerIndex = g
  * {@link initGameplay} has wired the DOM. Runs at most once per load.
  *
  * Failure modes are deliberately different:
- *   - room gone / frozen / slot taken → clear the session and show
+ *   - room gone, malformed, or slot taken → clear the session and show
  *     "Previous room no longer exists" (Req 11.8, design §Session Restore
- *     Failure). A room idle past 24h lands here too: every write to it is
- *     PERMISSION_DENIED, so it is gone for all practical purposes.
+ *     Failure). Local session expiry is handled independently by session.js.
  *   - the verifying READ itself failed → keep the session and say so, because a
  *     dead network is not evidence the room disappeared.
  *
@@ -3588,7 +3662,6 @@ export async function attemptAutoRejoin() {
     const room = exists ? (snapshot.val() || {}) : null;
 
     if (!room || isRoomUnusable(room)) {
-      if (room) reapUnusableRoom(session.roomCode, room).catch(() => {});
       clearSession();
       showToast(SESSION_EXPIRED_MESSAGE, true);
       return false;
@@ -3636,6 +3709,9 @@ export async function attemptAutoRejoin() {
  * @returns {Promise<{reconnected: boolean}>}
  */
 async function restoreRoom(session, room) {
+  clearRoomLifecycleTimers();
+  hostLossMarker = null;
+  hostLossDeletionLatched = false;
   const roomCode = session.roomCode;
   const uid = authUid();
   const hostUid = typeof room?.meta?.hostUid === 'string' ? room.meta.hostUid : null;
@@ -3652,18 +3728,23 @@ async function restoreRoom(session, room) {
   resetRoundViewState();
   eliminationHistory = [];
 
+  currentMeta = room.meta && typeof room.meta === 'object' ? { ...room.meta } : {};
+  gameState.schemaVersion = currentMeta.schemaVersion === 2 ? 2 : 1;
   currentPlayers = room.players && typeof room.players === 'object' ? room.players : {};
-  currentChairs = room.chairs && typeof room.chairs === 'object' ? room.chairs : {};
+  currentChairsSnapshot = room.chairs && typeof room.chairs === 'object' ? room.chairs : {};
+  currentChairs = {};
+  currentRankings = Array.isArray(room.rankings) ? room.rankings : [];
   currentGame = null;
   currentRoomStatus = room.meta?.status || 'lobby';
   gameState.players = currentPlayers;
   gameState.chairs = currentChairs;
 
-  // Req 11.3 — our own `connected` flag went false when the old page unloaded.
+  // restoreConnection atomically marks the player present, stamps activity with
+  // server time, and clears hostDisconnectedAt when this is the host.
   const reconnected = await reassertConnected('rejoin');
 
-  // Req 12.5 — the previous onDisconnect registration died with that socket.
-  attachDisconnectHandler();
+  // The previous onDisconnect registration died with that socket.
+  await attachDisconnectHandler();
 
   // Req 11.8 — rewrite the session so `savedAt` (and any corrected host flag)
   // is fresh for the next reload.
@@ -3720,16 +3801,17 @@ async function reassertConnected(reason) {
   if (reassertInFlight) return false;
 
   const now = Date.now();
-  if (reason !== 'rejoin' && now - lastReassertAt < CONNECTED_REASSERT_THROTTLE_MS) return false;
+  const mustRestoreHostMarker = reason === 'rejoin' || reason === 'reconnect';
+  if (!mustRestoreHostMarker && now - lastReassertAt < CONNECTED_REASSERT_THROTTLE_MS) return false;
 
   reassertInFlight = true;
   lastReassertAt = now;
   try {
-    const result = await applyRootUpdates({
-      [roomPath(roomCode, `players/${playerKey(playerIndex)}/connected`)]: true,
-      [roomPath(roomCode, 'meta/lastActivity')]: now,
-    }, `reassertConnected:${reason}`);
-    return result.ok === true;
+    await restoreConnection(roomCode, playerIndex);
+    return true;
+  } catch (error) {
+    logError(`reassertConnected:${reason}`, error, { roomCode, playerIndex });
+    return false;
   } finally {
     reassertInFlight = false;
   }
@@ -3750,11 +3832,16 @@ async function reassertConnected(reason) {
 async function handleReconnect(info) {
   if (!gameState.roomCode || leavingRoom) return;
 
-  // onDisconnect registrations do not survive a socket teardown.
-  attachDisconnectHandler();
-  if (!unsubscribeRoom) startRoomListener(gameState.roomCode);
-
+  clearRoomLifecycleTimers();
   await reassertConnected('reconnect');
+  await attachDisconnectHandler();
+  if (!unsubscribeRoom) startRoomListener(gameState.roomCode);
+  scheduleHostLossCleanup();
+
+  if (currentGame) {
+    renderedPhase = null;
+    updateGameFromFirebase(currentGame);
+  }
   console.log(`[ui] resynced room ${gameState.roomCode} after ${info?.downtimeMs ?? '?'}ms offline`);
 }
 
@@ -3831,7 +3918,10 @@ export function isRoomMarkedAbandoned() {
  * @param {Object} players - Firebase `players` node
  */
 function updateReconnectGrace(players) {
-  if (!gameState.isHost) return;
+  if (!gameState.isHost || isHostLossActive()) {
+    releaseResolutionHold();
+    return;
+  }
 
   if (gameState.phase !== PHASES.CLAIMING) {
     releaseResolutionHold();
@@ -3870,12 +3960,12 @@ function updateReconnectGrace(players) {
  */
 function closeReconnectGrace(reason) {
   releaseResolutionHold();
-  if (!gameState.isHost || gameState.phase !== PHASES.CLAIMING) return;
+  if (!gameState.isHost || isHostLossActive() || gameState.phase !== PHASES.CLAIMING) return;
 
   const active = Array.isArray(gameState.activePlayerIds) ? gameState.activePlayerIds : [];
   if (active.length === 0) return;
 
-  const seated = new Set(seatedPlayerIds(currentChairs));
+  const seated = new Set(seatedPlayerIds(currentChairs, currentChairContext()));
   const waitingOnlyOnDropped = active.every(
     (id) => currentPlayers[id]?.connected === false || seated.has(id),
   );
@@ -4111,11 +4201,11 @@ function initSessionRecovery() {
 
   // Mobile browsers suspend sockets in a background tab; coming back to the
   // foreground is the cheapest moment to re-announce ourselves (Req 11.3).
-  const onVisibilityChange = () => {
+  const onVisibilityChange = async () => {
     if (document.visibilityState !== 'visible') return;
     if (!gameState.roomCode || leavingRoom) return;
-    attachDisconnectHandler();
-    reassertConnected('visible').catch(() => {});
+    await reassertConnected('visible');
+    await attachDisconnectHandler();
   };
   document.addEventListener('visibilitychange', onVisibilityChange);
   teardownCallbacks.push(() => document.removeEventListener('visibilitychange', onVisibilityChange));
@@ -4125,62 +4215,99 @@ function initSessionRecovery() {
 // SECTION 14 — PWA / SERVICE WORKER REGISTRATION                  (task 9.2)
 // ═════════════════════════════════════════════════════════════════════════════
 // Requirements: 13.2, 20.6
-//
-// Adapted from `public/.sw-registration-snippet.txt` (now deleted): the
-// snippet's local `showUpdateToast()` wrote straight into `#toastNotification`,
-// which would have bypassed the `[hidden]` → `.show` sequencing that
-// {@link showToast} owns, so it delegates instead. There is no `#updateToast`
-// element in this game.
+// The update prompt has its own persistent surface so gameplay/status toasts
+// cannot replace it while a new worker is waiting for consent.
 
-/** How long the update prompt stays tappable. */
-const UPDATE_TOAST_MS = 10000;
-
-/** Reload into the newly installed service worker. Exposed for the toast. */
+/** Ask the installed waiting worker to activate. The page reloads only after
+ * `controllerchange` confirms that this explicit request succeeded. */
 export function reloadForUpdate() {
-  try { window.location.reload(); } catch (_) {}
+  if (!waitingServiceWorker) return false;
+  updateActivationRequested = true;
+  try {
+    waitingServiceWorker.postMessage({ type: 'SKIP_WAITING' });
+    return true;
+  } catch (error) {
+    updateActivationRequested = false;
+    console.warn('[App] Could not activate the waiting service worker:', error);
+    return false;
+  }
 }
 
 if (typeof window !== 'undefined') window.reloadForUpdate = reloadForUpdate;
 
-/**
- * Offer the update as a tappable toast.
- *
- * `#toastNotification` is shared, so the click handler is added per prompt and
- * removed once the toast has faded — a stale "click to reload" listener on a
- * hidden element would be a nasty surprise later.
- */
-function showUpdateToast() {
-  showToast('New version available — tap to refresh', false, UPDATE_TOAST_MS);
-
-  const toast = document.getElementById('toastNotification');
-  if (!toast) return;
-
+/** Hide the update prompt without activating the waiting worker. */
+function dismissUpdateToast() {
+  const toast = document.getElementById('updateToast');
   if (updateToastCleanup) updateToastCleanup();
-
-  const onClick = () => reloadForUpdate();
-  toast.addEventListener('click', onClick);
-  toast.style.cursor = 'pointer';
-
-  updateToastCleanup = () => {
-    toast.removeEventListener('click', onClick);
-    toast.style.cursor = '';
-    updateToastCleanup = null;
-  };
-  setTimeout(() => { if (updateToastCleanup) updateToastCleanup(); }, UPDATE_TOAST_MS + TOAST_FADE_MS);
+  if (!toast) return;
+  toast.classList.remove('show');
+  toast.setAttribute('hidden', '');
 }
 
 /**
- * Register `public/sw.js` and watch for updates (Req 13.2).
- * No-ops where service workers are unavailable (jsdom, insecure origins).
+ * Show a colourful, persistent update prompt. The current app remains active
+ * until the player chooses `Update app`; `Later` only dismisses the prompt.
+ * @param {ServiceWorker|null} worker
+ */
+function showUpdateToast(worker = null) {
+  if (worker) waitingServiceWorker = worker;
+  if (!waitingServiceWorker) return;
+
+  const toast = document.getElementById('updateToast');
+  const updateButton = document.getElementById('applyUpdateBtn');
+  const laterButton = document.getElementById('dismissUpdateBtn');
+  if (!toast || !updateButton || !laterButton) return;
+
+  if (updateToastCleanup) updateToastCleanup();
+
+  updateButton.disabled = false;
+  updateButton.textContent = 'Update app';
+  laterButton.disabled = false;
+
+  const onUpdate = () => {
+    updateButton.disabled = true;
+    updateButton.textContent = 'Updating…';
+    laterButton.disabled = true;
+
+    if (!reloadForUpdate()) {
+      updateButton.disabled = false;
+      updateButton.textContent = 'Try again';
+      laterButton.disabled = false;
+    }
+  };
+  const onLater = () => dismissUpdateToast();
+
+  updateButton.addEventListener('click', onUpdate);
+  laterButton.addEventListener('click', onLater);
+  updateToastCleanup = () => {
+    updateButton.removeEventListener('click', onUpdate);
+    laterButton.removeEventListener('click', onLater);
+    updateToastCleanup = null;
+  };
+
+  toast.removeAttribute('hidden');
+  requestFrame(() => {
+    void toast.offsetHeight;
+    toast.classList.add('show');
+  });
+}
+
+/**
+ * Register `public/sw.js` and watch for a fully installed waiting worker.
+ * Updates never activate automatically; activation and reload require the
+ * player's explicit `Update app` action.
  */
 function registerServiceWorker() {
   if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
 
-  let controllerChanged = false;
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (controllerChanged) return;
-    controllerChanged = true;
-    console.log('[App] Controller changed, new version active');
+    if (!updateActivationRequested) {
+      console.log('[App] Service worker controller changed without an in-page update request');
+      return;
+    }
+    updateActivationRequested = false;
+    console.log('[App] Requested update active; reloading');
+    try { window.location.reload(); } catch (_) {}
   });
 
   const start = () => {
@@ -4189,9 +4316,11 @@ function registerServiceWorker() {
         console.log('✅ Service Worker registered:', registration.scope);
 
         // A worker that finished installing before this listener attached.
-        if (registration.waiting && navigator.serviceWorker.controller) showUpdateToast();
+        if (registration.waiting && navigator.serviceWorker.controller) {
+          showUpdateToast(registration.waiting);
+        }
 
-        // Re-check every 5 minutes so a long-lived tab still picks updates up.
+        // Re-check every 5 minutes so a long-lived tab still discovers updates.
         const updateTimer = setInterval(() => {
           registration.update().catch(() => {});
         }, 5 * 60 * 1000);
@@ -4204,8 +4333,8 @@ function registerServiceWorker() {
 
           newWorker.addEventListener('statechange', () => {
             if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-              console.log('[App] New service worker installed, update available');
-              showUpdateToast();
+              console.log('[App] New service worker installed and waiting for user action');
+              showUpdateToast(registration.waiting || newWorker);
             }
           });
         });
@@ -4213,13 +4342,6 @@ function registerServiceWorker() {
       .catch((error) => {
         console.log('❌ Service Worker registration failed:', error);
       });
-
-    navigator.serviceWorker.addEventListener('message', (event) => {
-      if (event.data && event.data.type === 'UPDATE_AVAILABLE') {
-        console.log(`[App] Update available: ${event.data.version}`);
-        showUpdateToast();
-      }
-    });
   };
 
   if (document.readyState === 'complete') start();

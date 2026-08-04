@@ -259,12 +259,11 @@
 
                 <p id="eliminationBanner" class="elimination-banner" role="status" aria-live="polite" hidden></p>
 
+                <!-- Compact gameplay roster: one fixed row for up to eight
+                     players. Cards contain only avatar + truncated name; CSS
+                     state classes provide active/out/connection cues. -->
                 <section class="players-section" aria-labelledby="gamePlayersHeading">
                     <h3 id="gamePlayersHeading" class="sr-only">Players</h3>
-                    <!-- Kept in the DOM (src/main.js still renders into it) but
-                         demoted to a compact single-row strip under the stage by
-                         the `.legacy-strip` class. Remove once main.js migrates
-                         to #stagePlayerList / the stage itself. -->
                     <ul id="playerGrid" class="player-grid legacy-strip" aria-live="polite">
                         <!-- Player cards injected by src/main.js -->
                     </ul>
@@ -298,8 +297,22 @@
 
     </main>
 
-    <!-- Toast notifications -->
+    <!-- Ordinary transient notifications -->
     <div id="toastNotification" class="toast-notification" role="status" aria-live="polite" aria-atomic="true" hidden></div>
+
+    <!-- Persistent PWA update prompt; the waiting worker activates only after
+         the player chooses Update app. -->
+    <aside id="updateToast" class="update-toast" role="status" aria-live="polite" aria-atomic="true" hidden>
+        <span class="update-toast-icon" aria-hidden="true">✨</span>
+        <div class="update-toast-copy">
+            <strong>A fresh version is ready!</strong>
+            <span>Update now, or keep playing and choose Later.</span>
+        </div>
+        <div class="update-toast-actions">
+            <button type="button" id="applyUpdateBtn" class="update-toast-btn primary">Update app</button>
+            <button type="button" id="dismissUpdateBtn" class="update-toast-btn secondary">Later</button>
+        </div>
+    </aside>
 
     <!-- Screen-reader only announcements for phase changes -->
     <div id="liveAnnouncer" class="sr-only" role="status" aria-live="assertive" aria-atomic="true"></div>

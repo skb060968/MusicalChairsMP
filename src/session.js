@@ -26,11 +26,10 @@
  * ─────────────────────────────────────────────────────────────────────────────
  * A `savedAt` timestamp is written alongside the session and sessions older
  * than {@link SESSION_MAX_AGE_MS} (24h) are treated as absent and cleared.
- * Rationale: the Firebase rules mark rooms idle beyond 24 hours as
- * unusable/cleanable (Req 17.2), so a session older than that can never be
- * rejoined — attempting it would only produce a "Previous room no longer
- * exists" toast on every future boot. Expiring locally keeps the boot path
- * fast and avoids a pointless network round trip.
+ * This is a local privacy/recovery limit only; room deletion authority is
+ * governed separately by intentional host leave and the host-loss grace marker.
+ * Expiring locally keeps the boot path fast and avoids a stale network round
+ * trip.
  *
  * A `v` (schema version) field is also written. Anything without the current
  * version — or with a missing/implausible `savedAt`, which is what an older
@@ -53,7 +52,7 @@ export const STORAGE_UNAVAILABLE_MESSAGE = 'Auto-rejoin unavailable in private m
 /** Message the UI surfaces when a restore target has gone away (task 7.2). */
 export const SESSION_EXPIRED_MESSAGE = 'Previous room no longer exists';
 
-/** Sessions older than this cannot be rejoined (rooms idle >24h are cleaned). */
+/** Local session records expire after 24 hours. */
 export const SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 /**
