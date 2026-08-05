@@ -23,23 +23,23 @@
  *   - `#liveAnnouncer` is an `aria-live="assertive"` region for phase changes.
  *     `#toastNotification` is already `aria-live="polite"`, so a toast must not
  *     be duplicated into the announcer.
- *   - The gameplay surface is `#stage` (a real `<button>`): `#stageChairs`,
- *     `#stageOrbit`, and `#stageSpectators` are filled with `.chair` / `.actor`
- *     elements by SECTION 10. JS owns their POSITION (inline left/top
- *     percentages) while style.css owns their appearance. `#stageHint` is the
- *     claim feedback region; `#stagePlayerList` is its sr-only equivalent
- *     because the ring itself is `aria-hidden`.
+ *   - The gameplay surface is `#stage` (a real `<button>`): `#stageChairs`
+ *     and `#stageOrbit` are filled with `.chair` / active `.actor` elements by
+ *     SECTION 10. JS owns their POSITION (inline left/top percentages) while
+ *     style.css owns their appearance. `#stageHint` is the claim feedback
+ *     region; `#stagePlayerList` is its sr-only equivalent because the ring
+ *     itself is `aria-hidden`.
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * SECTION MAP (later tasks append into their own labelled section)
+ * SECTION MAP
  * ─────────────────────────────────────────────────────────────────────────────
- *    1. Imports                                        (task 6.1) ✔
- *    2. Constants                                      (task 6.1) ✔
- *    3. Module state                                   (task 6.1) ✔
- *    4. Screen navigation + UI helpers                 (task 6.1) ✔
- *    5. Mute / audio status wiring                     (task 6.1) ✔
- *    6. Connection status wiring                       (task 6.1) ✔
- *    7. Bootstrap / DOMContentLoaded                   (task 6.1) ✔
+ *    1. Imports                                        (task 6.1)
+ *    2. Constants                                      (task 6.1)
+ *    3. Module state                                   (task 6.1)
+ *    4. Screen navigation + UI helpers                 (task 6.1)
+ *    5. Mute / audio status wiring                     (task 6.1)
+ *    6. Connection status wiring                       (task 6.1)
+ *    7. Bootstrap / DOMContentLoaded                   (task 6.1)
  *    8. Room create & join flows                       (task 6.2)
  *    9. Lobby rendering & game start                   (task 6.3)
  *   10. Game screen, stage & drag-to-claim             (task 6.4)
@@ -51,10 +51,11 @@
  * House rules for the sections below:
  *   - Add imports to SECTION 1, module-level mutable state to SECTION 3. Do not
  *     scatter either through the flow sections.
- *   - Reach the DOM through {@link el} so a missing element degrades to a warning
- *     instead of a TypeError.
- *   - Route every user-visible message through {@link showToast} /
- *     {@link announce} so the a11y contract stays in one place.
+ *   - Use {@link el} when a missing fixed-contract node should emit a warning;
+ *     direct DOM access is appropriate for optional or repeatedly queried nodes.
+ *   - Use {@link showToast} for transient notices and {@link announce} for
+ *     assertive nonvisual updates. Dedicated live regions are updated directly
+ *     so the same message is never announced twice.
  */
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -62,11 +63,8 @@
 // ═════════════════════════════════════════════════════════════════════════════
 
 /**
- * Namespace import on purpose. `authReady` is being added to firebase-config.js
- * in a parallel task; a named import of an export that does not exist yet is a
- * hard build failure in Rollup, whereas a namespace lookup degrades to
- * `undefined` and is picked up automatically once the export lands.
- * See {@link initFirebase}.
+ * Namespace import on purpose. It gives {@link initFirebase} access to the
+ * existing `authReady` promise alongside the shared auth and database exports.
  */
 import * as firebaseConfig from './firebase-config.js';
 
@@ -100,9 +98,9 @@ import {
 } from './firebase-recovery.js';
 
 // ── Tasks 6.2 - 6.6 ─────────────────────────────────────────────────────────
-// Room lifecycle + real-time listeners. Every host-only game write goes through
-// game-manager.js (which guards on `isHost` and returns `{ok:false,
-// skipped:'not-host'}`), so nothing here writes game state on a non-host.
+// firebase-sync.js owns room lifecycle, real-time listeners, and the atomic
+// initial start. game-manager.js owns host-guarded round progression and claim
+// resolution.
 import {
   createRoom,
   joinRoom,
@@ -180,8 +178,8 @@ import {
 export const GAME_NAME = 'Musical Chairs';
 
 /**
- * Every screen id in index.html. Prefer `SCREENS.LOBBY` over a bare string so a
- * typo fails at import time rather than silently showing nothing.
+ * Centralized screen IDs from index.html. Prefer `SCREENS.LOBBY` over a bare
+ * string; {@link showScreen} validates the resolved target at runtime.
  */
 export const SCREENS = Object.freeze({
   MENU: 'menuScreen',
@@ -255,7 +253,7 @@ let hostLossDeletionLatched = false;
 /** True while a leave is in flight, so late Firebase events are ignored (6.3). */
 let leavingRoom = false;
 
-/** Phase/round already rendered — stops music+countdown restarting on every tick (6.4). */
+/** Phase/round already rendered — prevents music and timers restarting on repeated snapshots. */
 let renderedPhase = null;
 let renderedRound = 0;
 
@@ -684,15 +682,10 @@ function initConnectionStatusWiring() {
 // ═════════════════════════════════════════════════════════════════════════════
 
 /**
- * Wait for anonymous auth before any Firebase read/write is attempted.
+ * Await the existing `authReady` readiness value before any Firebase access.
  *
- * `firebase-config.js` is expected to export `authReady` — a promise (or a
- * function returning one) that settles once `signInAnonymously` resolves. The
- * export is being added by a parallel task; until it lands this logs a warning
- * and continues, because the SDK queues operations anyway and every call site
- * goes through the retry layer.
- *
- * @returns {Promise<boolean>} true when auth was confirmed ready
+ * @returns {Promise<boolean>} true when readiness settles without rejection;
+ *   false when readiness is unavailable or rejects
  */
 async function initFirebase() {
   const ready = firebaseConfig.authReady;
@@ -828,10 +821,10 @@ const LOBBY_PRUNE_DELAY_MS = 2500;
 /* ---------------------------- Firebase plumbing --------------------------- */
 
 /**
- * Lazily resolve the `firebase/database` helpers this module needs for the two
- * writes no existing module exposes: the multi-path "Play Again" reset and the
- * pre-join capacity read. Dynamic so a bare import of main.js in jsdom stays
- * side-effect free, mirroring the pattern in game-manager.js.
+ * Lazily resolve the `firebase/database` helpers used for the multi-path
+ * "Play Again" write and one-off room reads. Dynamic so a bare import of
+ * main.js in jsdom stays side-effect free, mirroring the pattern in
+ * game-manager.js.
  *
  * @returns {Promise<{ref: Function, get: Function, update: Function, serverTimestamp: Function}>}
  */
@@ -870,10 +863,10 @@ async function applyRootUpdates(updates, context) {
 }
 
 /**
- * Read a room once, for the pre-join checks (Req 1.4, 1.5).
- * `firebase-sync.joinRoom` only throws "Room not found" and "Game already
- * started"; capacity has to be checked here or the join would write an
- * out-of-range `player_8` and be rejected by the rules instead.
+ * Read a room once as an advisory pre-join/session check for clear errors and
+ * availability. `firebase-sync.joinRoom` independently rechecks the room,
+ * schema, status, capacity, avatar uniqueness, and lowest available slot in
+ * its transaction, so this read is not authoritative.
  *
  * @param {string} roomCode
  * @returns {Promise<{ok: boolean, value?: any}>}
@@ -1252,8 +1245,9 @@ export async function handleJoinRoom(event) {
 
   showLoading('Joining room…');
   try {
-    // Pre-flight: capacity and status, so the player gets the required copy
-    // instead of a rules rejection. Skipped when the read itself fails.
+    // Advisory preflight for clear errors and availability. The join transaction
+    // remains authoritative and revalidates everything; if this read fails,
+    // that transaction still performs its full validation.
     const pre = await readRoomOnce(code);
     if (pre.ok) {
       const snapshot = pre.value;
@@ -1679,13 +1673,10 @@ export function updateStartButtonState(players) {
 }
 
 /**
- * HOST ONLY. Move the room to "playing" and open round 1
- * (Req 3.1, 3.2, 3.3, 3.4).
- *
- * Two writes on purpose: `startGame` flips `meta/status` (the rules only allow
- * lobby → playing) and seeds `game`, then `startMusicPhase` stamps
- * `musicStartTime` with `serverTimestamp()` (Req 4.3, 12.3) — a client clock
- * must never be written there. Both land well inside the 2 second budget.
+ * HOST ONLY. Atomically starts the room with status "playing" and round one
+ * directly in the music phase, using a 30–60 second duration and server
+ * timestamp while clearing chairs (Req 3.1, 3.2, 3.3, 3.4). This prevents a
+ * transient schema-v2 playing/lobby state.
  */
 export async function handleStartGame() {
   if (!gameState.isHost || !gameState.roomCode || isHostLossActive()) return;
@@ -1938,14 +1929,6 @@ const DEFAULT_CHAIR_RADIUS = 23;
 const DEFAULT_ORBIT_RADIUS = 39;
 
 /**
- * Extra radius for players who are already out. They keep an avatar (spectators
- * follow the round on the same stage) but stand off the orbit ring so they never
- * read as contenders. Clamped below 50 so nothing leaves the stage box.
- */
-const SIDELINE_RADIUS_OFFSET = 9;
-const MAX_RADIUS = 47;
-
-/**
  * Capture zone multiplier on the chair's own radius (Req 6.3 "feels right").
  * A finger drags the avatar, not a mouse cursor, so the zone is deliberately
  * more generous than the chair's painted size.
@@ -2094,8 +2077,8 @@ function renderPhase(phase, gameData, changed) {
       renderEliminationPhase(gameData);
       break;
     default: {
-      // status 'playing' with game/phase still 'lobby' — the host's music write
-      // is in flight.
+      // Defensive fallback for legacy-v1 or malformed state; schema-v2 starts
+      // atomically in the music phase.
       clearMusicCountdown();
       setPhaseText('Get ready…');
       setStageIdle('Get ready — the music is about to start.');
@@ -2127,7 +2110,7 @@ function renderMusicPhase(gameData) {
   setMusicIndicatorVisible(true);
   setStageHint('Music is playing. When it stops, drag yourself onto a chair.');
 
-  // N-1 chairs, one actor per player, then hand the ring to the CSS animation.
+  // N-1 chairs, one actor per active player, then hand the ring to the CSS animation.
   buildStage({ force: true });
   setStageMode('orbiting');
 
@@ -2323,11 +2306,6 @@ function stageOrbitEl() {
   return document.getElementById('stageOrbit');
 }
 
-/** The fixed layer that holds eliminated spectator actors. */
-function stageSpectatorsEl() {
-  return document.getElementById('stageSpectators');
-}
-
 /** The static layer that holds the chairs. */
 function stageChairsEl() {
   return document.getElementById('stageChairs');
@@ -2422,11 +2400,8 @@ function stageSignature() {
 }
 
 /**
- * Build the ring: N-1 chairs and one actor per player (Req 6.1).
- *
- * Active players are distributed evenly around `--orbit-radius`. Players who are
- * already out keep an avatar — spectators follow the round on the same stage —
- * but stand on a wider "sideline" ring so they never read as contenders.
+ * Build the ring: N-1 chairs and one actor per active player (Req 6.1).
+ * Active players are distributed evenly around `--orbit-radius`.
  *
  * @param {Object} [options]
  * @param {boolean} [options.force=false] - Rebuild even if the signature matches
@@ -2434,19 +2409,16 @@ function stageSignature() {
 function buildStage({ force = false } = {}) {
   const chairsLayer = stageChairsEl();
   const orbit = stageOrbitEl();
-  const spectators = stageSpectatorsEl();
-  if (!chairsLayer || !orbit || !spectators) return;
+  if (!chairsLayer || !orbit) return;
 
   const signature = stageSignature();
-  const actorCount = orbit.children.length + spectators.children.length;
+  const actorCount = orbit.children.length;
   if (!force && signature === renderedStageSignature && actorCount > 0) return;
   // Never rebuild under a live drag unless the round itself moved on.
   if (dragState && !force) return;
 
   const { chairRadius, orbitRadius } = readStageRadii();
   const active = activeStagePlayerIds();
-  const roster = sortedPlayerIds(currentPlayers);
-  const sidelined = roster.filter((id) => !active.includes(id));
 
   // Chairs: N-1, evenly spaced on the inner ring.
   const ids = chairIds(chairCountFor(active));
@@ -2468,17 +2440,6 @@ function buildStage({ force = false } = {}) {
     activeFragment.appendChild(buildActor(playerId, left, top));
   });
   orbit.replaceChildren(activeFragment);
-
-  // Eliminated actors occupy fixed screen positions outside the active orbit.
-  // This layer never receives the stage-orbit animation, so spectators remain
-  // stationary throughout every later music and claiming phase.
-  const spectatorFragment = document.createDocumentFragment();
-  const sidelineRadius = Math.min(orbitRadius + SIDELINE_RADIUS_OFFSET, MAX_RADIUS);
-  sidelined.forEach((playerId, index) => {
-    const { left, top } = ringPosition(index, sidelined.length, sidelineRadius);
-    spectatorFragment.appendChild(buildActor(playerId, left, top));
-  });
-  spectators.replaceChildren(spectatorFragment);
 
   // A fresh active ring must not inherit the inline overrides the freeze wrote.
   orbit.style.animation = '';
@@ -2543,15 +2504,16 @@ function setStageMode(mode) {
  * Re-render chair and actor STATE (never geometry) from the `chairs` mirror, so
  * every device agrees on who is sitting where (Req 6.4, 7.1).
  *
- * `resolveDuplicateClaims` runs first: if one device somehow landed two claims,
- * every device collapses them the same way before painting.
+ * `resolveDuplicateClaims` is defense-in-depth for historical, malformed, or
+ * partially synchronized duplicate data. Schema-v2 rules reject a second
+ * chair for the same player; reconciliation keeps rendering deterministic if
+ * older or invalid data is encountered.
  */
 function refreshStageState() {
   const stage = stageEl();
   const chairsLayer = stageChairsEl();
   const orbit = stageOrbitEl();
-  const spectators = stageSpectatorsEl();
-  if (!stage || !chairsLayer || !orbit || !spectators) return;
+  if (!stage || !chairsLayer || !orbit) return;
 
   const { chairs } = resolveDuplicateClaims(currentChairs, currentChairContext());
   const localId = localPlayerId();
@@ -2563,7 +2525,7 @@ function refreshStageState() {
     const taken = Boolean(chairId && chairs[chairId]);
     chair.classList.toggle('claimed', taken);
     chair.classList.toggle('available', !taken);
-    // A chair someone else just took stops being a valid drop target.
+    // A chair someone else just took stops being a valid capture target.
     if (taken) chair.classList.remove('target');
   });
 
@@ -2790,8 +2752,9 @@ function onDragMove(event) {
 }
 
 /**
- * Release the pointer. A drag that ends over nothing simply leaves the avatar
- * where the player dropped it — the round is decided by chairs, not by gestures.
+ * Release the pointer. A drag that ends over open floor leaves the avatar at its
+ * final dragged position; releasing never creates a claim because claims happen
+ * only on capture-zone entry while moving.
  * @param {PointerEvent} event
  */
 function onDragEnd(event) {
@@ -2910,7 +2873,7 @@ function setTargetChair(chairId) {
   });
 }
 
-/** Drop every `.chair.target` marker. */
+/** Clear every `.chair.target` capture marker. */
 function clearChairTargets() {
   stageChairsEl()?.querySelectorAll('.chair.target').forEach((chair) => {
     chair.classList.remove('target');
@@ -2989,7 +2952,7 @@ function seatLocalActor(actor, chairId) {
 }
 
 /**
- * Locally mark a chair as taken so it stops being a drop target immediately.
+ * Locally mark a chair as taken so it stops being a capture target immediately.
  * @param {string} chairId
  */
 function markChairClaimed(chairId) {
@@ -3087,8 +3050,9 @@ async function resolveClaimPhaseAsHost(reason) {
 
 /**
  * Wire the game screen controls: one delegated `pointerdown` on `#stageOrbit`.
- * Pointer events only (Req 13.3 without the touch/click de-dupe dance), and the
- * per-drag move/up/cancel listeners live on the captured avatar itself.
+ * Pointer events only (Req 13.3 without the touch/click de-dupe dance). Per-drag
+ * move/up/cancel listeners live on `window`; the actor supplies only the
+ * `lostpointercapture` cleanup listener.
  */
 function initGameControls() {
   if (stageDragWired) return;
@@ -3124,8 +3088,8 @@ function renderEliminationPhase(gameData) {
   setMusicIndicatorVisible(false);
   setPhaseText('💥 Elimination');
 
-  // Keep `.frozen` so nothing moves while the result reads, but the drag window
-  // is over: `.claiming` goes away and every drop marker with it.
+  // Keep `.frozen` so eliminated actors remain visible while the result reads,
+  // but the drag window is over: `.claiming` and every capture marker go away.
   stageEl()?.classList.remove('claiming');
   clearChairTargets();
   setStageHint('');
@@ -3153,9 +3117,10 @@ function recordEliminationRound(round, playerIds) {
 }
 
 /**
- * Play the elimination animation for at least 2 seconds, with the sound and the
- * name/rank banner, holding the controls locked throughout
- * (Req 8.1, 8.2, 8.3, 8.4, 8.5).
+ * Keep eliminated stage actors frozen and visible for the 2200ms result window
+ * while roster cards animate and the sound/name/rank banner plays. At timeout,
+ * only eliminated stage actors are removed; bottom-roster and accessible state
+ * remain before controls unlock and progression continues (Req 8.1–8.5).
  *
  * @param {string[]} playerIds - Players eliminated this round
  */
@@ -3184,9 +3149,10 @@ export function displayEliminationAnimation(playerIds) {
   if (eliminationTimer !== null) clearTimeout(eliminationTimer);
   eliminationTimer = setTimeout(() => {
     eliminationTimer = null;
+    document.querySelectorAll('#stage .actor.eliminated').forEach((actor) => actor.remove());
     unlockGameControls();
-    // Req 8.5 / 9.2 — the host opens the next round straight after the
-    // animation, comfortably inside the 3 second budget.
+    // Req 8.5 / 9.2 — after the result window, the host progresses directly
+    // to the next round or victory, comfortably inside the 3 second budget.
     advanceRoundIfHost();
   }, ELIMINATION_ANIMATION_MS);
 }
@@ -4022,8 +3988,8 @@ function phaseBudgetMs(phase) {
       return CLAIM_PHASE_TIMEOUT_MS + RECONNECT_GRACE_MS;
     case PHASES.ELIMINATION:
       return ELIMINATION_ANIMATION_MS;
-    // `game/phase` still 'lobby' while the room is 'playing' — the host's music
-    // write should land immediately.
+    // Defensive budget for legacy-v1 or malformed state; schema-v2 starts
+    // atomically in the music phase.
     case PHASES.LOBBY:
       return 0;
     default:

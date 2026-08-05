@@ -232,9 +232,8 @@
                      <button> for keyboard and screen-reader accessibility.
 
                      DOM contract (children are injected by src/main.js):
-                       #stageChairs     → <div class="chair" data-chair-id="chair_0"></div>
-                       #stageOrbit      → active-player <div class="actor"> nodes
-                       #stageSpectators → eliminated-player <div class="actor"> nodes
+                       #stageChairs → <div class="chair" data-chair-id="chair_0"></div>
+                       #stageOrbit  → active-player <div class="actor"> nodes
                      JS owns POSITION (inline left/top percentages on every
                      .chair / .actor); style.css owns APPEARANCE only.
                      ================================================================ -->
@@ -244,7 +243,6 @@
                     <div class="stage-floor" aria-hidden="true"></div>
                     <div class="stage-chairs" id="stageChairs" aria-hidden="true"></div>
                     <div class="stage-orbit" id="stageOrbit" aria-hidden="true"></div>
-                    <div class="stage-spectators" id="stageSpectators" aria-hidden="true"></div>
                 </button>
                 <p id="stageHint" class="stage-hint" role="status" aria-live="polite"></p>
 

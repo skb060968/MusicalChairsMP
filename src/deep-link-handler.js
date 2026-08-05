@@ -73,7 +73,8 @@ export function initDeepLinkHandler({ roomInputId, joinScreenId, gameName = 'Mus
     roomInput.value = urlRoomCode.toUpperCase();
   }
   
-  // Show join screen if provided
+  // Remove `hidden` defensively; the caller activates the join screen under
+  // its own navigation contract.
   if (joinScreenId) {
     const screen = document.getElementById(joinScreenId);
     if (screen) {

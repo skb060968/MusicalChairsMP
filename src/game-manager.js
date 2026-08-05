@@ -7,12 +7,14 @@
  * ─────────────────────────────────────────────────────────────────────────────
  * THE MECHANIC (classic musical chairs — no tap race)
  * ─────────────────────────────────────────────────────────────────────────────
- * N active players compete for N-1 chairs. Music plays, avatars orbit; the music
- * stops and each player DRAGS their avatar onto a chair. A chair node is
- * CREATE-ONLY for players under the deployed rules, so the second device racing
- * for the same chair is rejected with PERMISSION_DENIED — that rejection IS the
- * arbitration, there is no server code. Whoever holds no chair when the round
- * resolves is eliminated. Nothing compares timestamps to decide who is out.
+ * N active players compete for N-1 chairs. Music plays and avatars orbit. When
+ * the music stops, each player drags their own avatar; a claim is attempted as
+ * soon as its centre enters a free chair's capture zone, never on release. A
+ * chair node is CREATE-ONLY for players under the deployed rules, so the second
+ * device racing for the same chair is rejected with PERMISSION_DENIED — that
+ * rejection IS the arbitration, there is no server code. Whoever holds no chair
+ * when the round resolves is eliminated. Nothing compares timestamps to decide
+ * who is out.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * MODULE CONTRACT (important for the property tests in tasks 4.1 - 4.5)
@@ -22,26 +24,22 @@
  * Firebase app, auth session, or network is available, so a top-level
  * `import ... from './firebase-config.js'` would break every test on load.
  *
- * Later tasks that need Firebase I/O (`startMusicPhase`, `claimChair`,
- * the host-only elimination writer) must either:
- *   1. use a lazy dynamic import inside the async function body, e.g.
- *        const { writeGameState } = await import('./firebase-sync.js');
- *   2. or accept the writer as an injected dependency parameter.
- * Keep every decision function pure and Firebase-free; keep the I/O in thin
- * wrappers around them.
+ * Firebase I/O uses lazy dynamic imports inside async wrappers or writers
+ * supplied as injected dependency parameters. Pure decision functions remain
+ * Firebase-free, with I/O kept in thin wrappers around them.
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * SECTION MAP (later tasks append into their own labelled section)
+ * SECTION MAP
  * ─────────────────────────────────────────────────────────────────────────────
- *   1. Constants                                        (task 3.1) ✔
- *   2. Local game state                                 (task 3.1) ✔
- *   3. Room code helpers (pure)                         (task 3.1) ✔
- *   4. Player index helpers (pure)                      (task 3.1) ✔
- *   5. Music phase logic                                (task 3.2) ✔
- *   6. Chair claiming logic                             (task 3.3) ✔
- *   7. Elimination logic                                (task 3.4) ✔
- *   8. Round progression, victory, reset, rankings      (task 3.5) ✔
- *   9. Claim phase timeout (10s)                        (task 3.6) ✔
+ *   1. Constants                                        (task 3.1)
+ *   2. Local game state                                 (task 3.1)
+ *   3. Room code helpers (pure)                         (task 3.1)
+ *   4. Player index helpers (pure)                      (task 3.1)
+ *   5. Music phase logic                                (task 3.2)
+ *   6. Chair claiming logic                             (task 3.3)
+ *   7. Elimination logic                                (task 3.4)
+ *   8. Round progression, victory, reset, rankings      (task 3.5)
+ *   9. Claim phase timeout (10s)                        (task 3.6)
  */
 
 // `firebase-recovery.js` is import-safe: it defines functions only and reaches
@@ -115,7 +113,7 @@ export const PHASES = Object.freeze({
  *   phase: 'lobby' | 'music' | 'claiming' | 'elimination' | 'victory',
  *   eliminatedThisRound: string[],
  *   players: Object<string, { name: string, uid?: string, connected: boolean, eliminated: boolean }>,
- *   chairs: Object<string, { playerId: string, claimedAt: number }>,
+ *   chairs: Object<string, { playerId: string, claimedAt: number, round: number }>,
  *   hasLocalPlayerClaimed: boolean,
  *   claimedChairId: string | null,
  *   localTimerRemaining: number,
@@ -140,7 +138,8 @@ export function createInitialGameState() {
     phase: PHASES.LOBBY,
     eliminatedThisRound: [],
     players: {},
-    // `chairs` mirrors the Firebase `chairs` node: chairId → { playerId, claimedAt }.
+    // `chairs` mirrors normalized Firebase chair records:
+    // chairId → { playerId, claimedAt, round }.
     chairs: {},
 
     // Local UI state
@@ -301,7 +300,7 @@ export const MUSIC_DURATION_MIN_MS = 30000;
 /** Longest music phase, in ms (Req 4.1). Firebase rules reject anything more. */
 export const MUSIC_DURATION_MAX_MS = 60000;
 
-/** Countdown tick cadence; also bounds the music → claiming handoff (Req 4.4, 19.2). */
+/** Optional remaining-time tick cadence; an independent timeout controls expiry. */
 export const MUSIC_TICK_INTERVAL_MS = 100;
 
 /** Root node holding every room (Req 1.2, 18.1). */
@@ -541,8 +540,6 @@ export async function startMusicPhase(roomCode, options = {}) {
  * device reacts to the Firebase update instead. Chairs are already empty at this
  * point because {@link startMusicPhase} cleared them.
  *
- * Replaces the old `startTapPhase`.
- *
  * @param {string} roomCode - Room code
  * @param {Object} [options] - Same shape as {@link startMusicPhase}
  * @returns {Promise<{ ok: boolean, skipped?: string, attempts?: number,
@@ -577,10 +574,10 @@ let musicExpiryTimer = null;
 let musicDeadlineAt = 0;
 
 /**
- * Runs the local music countdown and transitions to the claiming phase when the
- * duration expires (Req 4.4). Every device runs its own copy: the interval
- * drives the progress bar, the timeout fires the handoff so expiry accuracy is
- * not limited by the tick cadence.
+ * Runs the hidden local music countdown and transitions to the claiming phase
+ * when the duration expires (Req 4.4). Every device runs its own timer: the
+ * interval maintains optional remaining-time state and callbacks, while the
+ * timeout controls expiry independently of tick cadence.
  *
  * Cancellable and single-instance — starting a new countdown clears the old one,
  * so timers cannot leak across rounds.
@@ -711,13 +708,16 @@ export function isValidChairId(id) {
 }
 
 /**
- * Normalizes a `chairs` node into `{ chairId: { playerId, claimedAt } }`,
- * dropping malformed entries. Pure — always a fresh object.
+ * Normalizes a `chairs` node into
+ * `{ chairId: { playerId, claimedAt, round } }`, dropping malformed entries.
+ * Pure — always a fresh object.
  *
- * A claim is accepted only when it is an exact schema-v2 record and agrees
- * with all authoritative round context supplied by the caller (or the shared
- * `gameState` when UI callers omit options). Stale or partially-synced data
- * must never decide an elimination.
+ * Raw legacy schema-v1 input may omit `round`; normalized records always carry
+ * the authoritative current round. A claim is accepted only when its exact
+ * schema matches the room version and it agrees with all authoritative round
+ * context supplied by the caller (or the shared `gameState` when UI callers
+ * omit options). Stale or partially-synced data must never decide an
+ * elimination.
  *
  * @param {Object|null|undefined} chairs - Firebase `chairs` node
  * @param {Object} [options] - Authoritative game context; defaults field-by-field
@@ -787,7 +787,9 @@ function sortedChairIds(chairs) {
 
 /**
  * Player IDs currently holding a chair (Req 7.1).
- * Pure — order follows the chairs (chair_0 first); duplicates are collapsed.
+ * Pure — order follows the chairs (chair_0 first). Historical, malformed, or
+ * partially synchronized same-player duplicates are collapsed defensively;
+ * schema-v2 rules prevent new duplicates.
  *
  * @param {Object|null|undefined} chairs - Firebase `chairs` node
  * @returns {string[]} Seated player IDs
@@ -807,8 +809,9 @@ export function seatedPlayerIds(chairs, options = {}) {
 
 /**
  * The chair a player is sitting on, if any (Req 6.4).
- * When a player somehow holds several chairs the lowest-numbered one is
- * reported; {@link resolveDuplicateClaims} is what actually resolves that case.
+ * For defensive historical, malformed, or partially synchronized duplicate
+ * data, the lowest-numbered chair is reported; {@link resolveDuplicateClaims}
+ * performs the full deterministic reconciliation.
  *
  * @param {Object|null|undefined} chairs - Firebase `chairs` node
  * @param {string} playerId - e.g. `player_2`
@@ -879,19 +882,20 @@ export function canClaimChair(state, chairId) {
 }
 
 /**
- * Releases the extra chairs of any player holding two or more (Req 7.1).
+ * Reconciles defensive input in which one player holds two or more chairs
+ * (Req 7.1).
  *
- * The deployed rules cannot prevent this: a `$chairId` write only sees its own
- * node, so it cannot scan siblings for the same `playerId`. Two create-only
- * writes from one device (a fast double drag, or a retry after a dropped ACK)
- * can therefore both land. The EARLIEST `claimedAt` wins — that is the chair the
- * player really sat on; the rest are released. Ties break toward the
- * lowest-numbered chair so every device reaches the same answer.
+ * Current deployed rules scan sibling chair IDs and reject a second chair for
+ * the same player. This helper is defense-in-depth for historical legacy,
+ * malformed, or partially synchronized data. It deterministically keeps the
+ * earliest `claimedAt`; ties keep the lower-numbered chair so every device
+ * reaches the same answer.
  *
  * Pure — returns a fresh chairs map; `chairs` is never mutated.
  *
- * @param {Object|null|undefined} chairs - Firebase `chairs` node
- * @returns {{ chairs: Object<string, { playerId: string, claimedAt: number }>,
+ * @param {Object|null|undefined} chairs - Raw Firebase `chairs` node; legacy
+ *   input may omit `round`
+ * @returns {{ chairs: Object<string, { playerId: string, claimedAt: number, round: number }>,
  *   releasedChairIds: string[] }} Cleaned map plus the chairs that were released
  *   (in seating order)
  */
@@ -947,8 +951,9 @@ const CHAIR_TAKEN = Symbol('chair-taken');
  * avatar back and the player drags to another chair, so both latches are
  * released before returning.
  *
- * Any other write failure also releases the latches so the player can retry; the
- * create-only rule still guarantees at most one chair per successful claim.
+ * Any other write failure also releases the latches so the player can retry.
+ * The latches prevent duplicate local attempts, while deployed sibling checks
+ * reject a second chair for the same player.
  *
  * @param {string} roomCode - Room code
  * @param {string} chairId - Target chair, `chair_0` .. `chair_6`
@@ -1046,9 +1051,9 @@ export async function claimChair(roomCode, chairId, playerIndex, options = {}) {
  * Decides who leaves the game this round (Req 7.1, 7.2, 7.3, 11.5).
  *
  * One rule: with N-1 chairs for N players, whoever holds no chair when the round
- * resolves is eliminated. No timestamps are compared to pick a loser — the only
- * place `claimedAt` matters is {@link resolveDuplicateClaims}, which runs first
- * so a player who somehow holds two chairs keeps just one.
+ * resolves is eliminated. No timestamps are compared to pick a loser;
+ * `claimedAt` is used only by the defensive legacy/malformed-data duplicate
+ * reconciliation in {@link resolveDuplicateClaims}, which runs first.
  *
  * A player whose `connected` flag is false counts as UNSEATED even if a stale
  * claim exists, because a player disconnected at the end of the claiming phase
@@ -1056,8 +1061,8 @@ export async function claimChair(roomCode, chairId, playerIndex, options = {}) {
  *
  * Pure and Firebase-free — neither `chairs` nor `activePlayerIds` is mutated.
  *
- * @param {Object<string, {playerId: string, claimedAt: number}>|null|undefined} chairs -
- *   `chairs` node
+ * @param {Object<string, {playerId: string, claimedAt: number, round?: number}>|null|undefined} chairs -
+ *   Raw `chairs` node; legacy input may omit `round`
  * @param {string[]} activePlayerIds - Players still in play
  * @param {Object} [options]
  * @param {Object} [options.players] - `players` node; disconnected actives count
@@ -1505,8 +1510,8 @@ export function clearAllGameTimers() {
 
 /**
  * Resolves a claiming phase with whatever chairs exist (Req 7.2, 7.3, 7.4, 7.6,
- * 11.5). Replaces the old `resolveTapPhase` and keeps its output shape, so the
- * round-resolution and victory paths in `main.js` are unchanged.
+ * 11.5). Returns the claiming-phase resolution shape consumed by round
+ * progression and victory handling.
  *
  * Pure — chains {@link determineElimination} → {@link applyElimination} →
  * {@link checkVictory} without touching Firebase or mutating `state`. This is
@@ -1603,8 +1608,6 @@ export async function writeEliminationResult(roomCode, resolution, options = {})
  * (Req 7.2, 7.3, 7.4). Wire this to {@link startClaimPhaseTimeout}'s `onExpire`
  * and to the "every chair is taken" path; non-hosts still get the resolution
  * back for optimistic rendering, they just do not write.
- *
- * Replaces the old `finalizeTapPhase`.
  *
  * @param {string} roomCode - Room code
  * @param {Object} [options]

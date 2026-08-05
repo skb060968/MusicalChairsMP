@@ -1119,13 +1119,13 @@ summary:focus-visible,
     border-style: dashed;
 }
 
-/* Layers: floor (decor) → chairs → orbiting active actors → fixed spectators.
-   The containers are transparent overlays, so they stay out of the pointer
-   stream; chairs and active actors opt back in below for hit-testing. */
+/* Layers: floor (decor) → chairs → orbiting active actors.
+   The containers are transparent overlays outside the pointer stream. Chairs
+   and actors opt back in; only actors initiate drags, while chair rectangles
+   provide geometry for JS centre-based capture testing. */
 .stage-floor,
 .stage-chairs,
-.stage-orbit,
-.stage-spectators {
+.stage-orbit {
     position: absolute;
     inset: 0;
     pointer-events: none;
@@ -1146,20 +1146,6 @@ summary:focus-visible,
     animation: stage-orbit var(--orbit-duration) linear infinite;
     animation-play-state: paused;
     will-change: transform;
-}
-
-/* Eliminated players live outside #stageOrbit. Their coordinates are fixed
-   relative to the stage, so later music rounds never carry them around the
-   chairs. They remain visual spectators and cannot intercept pointer input. */
-.stage-spectators {
-    z-index: 3;
-}
-
-.stage-spectators .actor {
-    animation: none;
-    pointer-events: none;
-    cursor: default;
-    will-change: auto;
 }
 
 /* Dance floor: outer disc + the two ring guides, sized from the radii so
@@ -1199,7 +1185,7 @@ summary:focus-visible,
     width: var(--chair-size);
     height: var(--chair-size);
     border-radius: 50%;
-    background: rgba(12, 7, 26, 0.55);
+    background: transparent;
     /* centre the chair on its coordinate */
     transform: translate(-50%, -50%);
     font-size: calc(var(--chair-size) * 0.86);
@@ -1399,7 +1385,8 @@ summary:focus-visible,
     line-height: 1;
 }
 
-/* ELIMINATED — out of the game: dimmed, grey, dashed ring + ✖ */
+/* ELIMINATED — transient frozen stage state during the 2200ms result window;
+   the actor is then removed while roster and accessible state remain. */
 .actor.eliminated {
     z-index: 1;
     animation: none;
@@ -1424,7 +1411,7 @@ summary:focus-visible,
     line-height: 1;
 }
 
-/* REJECTED — the chair was claimed first: short bounce-back (transform only) */
+/* REJECTED — the chair was claimed first: short transform-only rejection bounce */
 .actor.rejected {
     z-index: 5;
     animation: actor-reject 420ms var(--ease) 1 both;
@@ -1462,8 +1449,8 @@ summary:focus-visible,
     border-color: rgba(167, 139, 250, 0.7);
 }
 
-/* `:not(.rejected)` matters: a bounce-back must keep playing even while the
-   ring itself is paused, so the pause/run switches never touch it. */
+/* `:not(.rejected)` matters: a rejection bounce must keep playing even while
+   the ring itself is paused, so the pause/run switches never touch it. */
 .stage.orbiting .stage-orbit,
 .stage.orbiting .actor:not(.rejected) {
     animation-play-state: running;
@@ -1480,7 +1467,7 @@ summary:focus-visible,
     animation-play-state: paused;
 }
 
-/* CLAIMING — a drag is live: gold surround, chairs read as drop targets */
+/* CLAIMING — the drag window is open: gold surround and visible capture targets */
 .stage.claiming {
     border-color: var(--accent);
     box-shadow: 0 0 0 2px rgba(251, 191, 36, 0.35), var(--shadow-card);
@@ -1994,7 +1981,7 @@ summary:focus-visible,
     }
 }
 
-/* Bounce-back when the chair was claimed first (transform only, ~420ms) */
+/* Rejection bounce when the chair was claimed first (transform only, ~420ms) */
 @keyframes actor-reject {
     0% {
         transform: translate(-50%, -50%) scale(1.16);
@@ -2278,7 +2265,7 @@ summary:focus-visible,
         transform: translate(-50%, -50%) !important;
     }
 
-    /* Static substitute for the bounce-back: a dotted danger ring instead */
+    /* Static substitute for the rejection bounce: a dotted danger ring instead */
     .actor.rejected .actor-avatar {
         border-width: 3px;
         border-style: dotted;
