@@ -1,7 +1,7 @@
 {
   "name": "Musical Chairs",
   "short_name": "Musical Chairs",
-  "description": "Musical Chairs - real-time multiplayer party elimination game. When the music stops, tap fast or you are out.",
+  "description": "Musical Chairs - real-time multiplayer party elimination game. When the music stops, drag your avatar to a free chair.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
