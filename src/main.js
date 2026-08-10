@@ -4208,23 +4208,33 @@ function showUpdateToast(worker = null) {
   const toast = document.getElementById('updateToast');
   const updateButton = document.getElementById('applyUpdateBtn');
   const laterButton = document.getElementById('dismissUpdateBtn');
+  const updateMessage = document.getElementById('updateToastMessage');
   if (!toast || !updateButton || !laterButton) return;
 
   if (updateToastCleanup) updateToastCleanup();
 
   updateButton.disabled = false;
   updateButton.textContent = 'Update app';
+  updateButton.removeAttribute('aria-busy');
   laterButton.disabled = false;
+  toast.removeAttribute('aria-busy');
+  if (updateMessage) updateMessage.textContent = 'Update now, or keep playing and choose Later.';
 
   const onUpdate = () => {
     updateButton.disabled = true;
     updateButton.textContent = 'Updating…';
+    updateButton.setAttribute('aria-busy', 'true');
     laterButton.disabled = true;
+    toast.setAttribute('aria-busy', 'true');
+    if (updateMessage) updateMessage.textContent = 'Applying update… The app will reload automatically.';
 
     if (!reloadForUpdate()) {
       updateButton.disabled = false;
       updateButton.textContent = 'Try again';
+      updateButton.removeAttribute('aria-busy');
       laterButton.disabled = false;
+      toast.removeAttribute('aria-busy');
+      if (updateMessage) updateMessage.textContent = 'Update could not start. Please try again.';
     }
   };
   const onLater = () => dismissUpdateToast();
