@@ -1295,7 +1295,7 @@ function joinErrorMessage(error) {
   if (text.includes('valid avatar')) return 'Please choose an available avatar';
   if (text.includes('full')) return ROOM_FULL_MESSAGE;
   if (text.includes('already started')) return 'That game has already started';
-  if (text.includes('permission')) return `${ROOM_FULL_MESSAGE} or the game already started`;
+  if (text.includes('permission')) return 'The game server denied room access. Ask the host to refresh, then try again.';
   return 'Could not join the room. Please try again.';
 }
 
