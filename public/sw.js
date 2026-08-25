@@ -1,6 +1,6 @@
 /* Musical Chairs PWA Service Worker */
 
-const CACHE_VERSION = 'v1.22.0';
+const CACHE_VERSION = 'v1.23.0';
 const CACHE_NAME = `musical-chairs-${CACHE_VERSION}`;
 
 const STATIC_ASSETS = [
@@ -64,6 +64,8 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(request.url);
   if (request.method !== 'GET' || url.origin !== self.location.origin) return;
   if (EXCLUDED_PATHS.includes(url.pathname)) return;
+  // Never intercept/cache API calls (e.g. the LiveKit token endpoint).
+  if (url.pathname.startsWith('/api/')) return;
 
   const isNavigation = request.mode === 'navigate';
   const networkFirst = isNavigation

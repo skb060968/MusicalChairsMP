@@ -170,6 +170,8 @@ import {
   SESSION_EXPIRED_MESSAGE,
 } from './session.js';
 
+import { mountVoiceChat } from './voice-chat-widget.js';
+
 // ═════════════════════════════════════════════════════════════════════════════
 // SECTION 2 — CONSTANTS
 // ═════════════════════════════════════════════════════════════════════════════
@@ -228,6 +230,9 @@ const teardownCallbacks = [];
 
 /** Teardown returned by {@link listenRoom}; null when not in a room (6.2). */
 let unsubscribeRoom = null;
+
+/** Standardized voice-chat widget handle; null until mounted on the game screen. */
+let voiceWidget = null;
 
 /** Latest Firebase snapshots, mirrored so any renderer can read them (6.3/6.4). */
 let currentMeta = {};
@@ -1729,6 +1734,7 @@ function teardownRoom({ keepSession = false } = {}) {
   cancelDisconnectHandlerRegistration().catch(() => {});
   clearRoomLifecycleTimers();
   try { stopMusic(); } catch (_) {}
+  stopVoice();
   if (!keepSession) {
     clearSession();
     resetJoinRoomEntry();
@@ -1832,6 +1838,7 @@ function routeToRoomState() {
   }
 
   if (getCurrentScreen() !== SCREENS.GAME) showScreen(SCREENS.GAME);
+  mountVoice();
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -1876,6 +1883,34 @@ function gameContainer() {
 /** Local player's Firebase key, or null before a room is joined. */
 function localPlayerId() {
   return Number.isInteger(gameState.playerIndex) ? playerKey(gameState.playerIndex) : null;
+}
+
+/**
+ * Mount the standardized voice-chat widget once we're in a room and on the game
+ * screen. Idempotent — safe to call on every game-screen entry. Voice is opt-in
+ * and isolated; any failure only updates the widget button (never blocks play).
+ */
+function mountVoice() {
+  if (voiceWidget || !gameState.roomCode || !Number.isInteger(gameState.playerIndex)) return;
+  voiceWidget = mountVoiceChat({
+    mount: '#voice-widget',
+    game: 'musicalchairs',
+    getRoomCode: () => gameState.roomCode,
+    getIdentity: () => localPlayerId(),
+    getDisplayName: () => currentPlayers?.[localPlayerId()]?.name || `Player ${gameState.playerIndex + 1}`,
+    getIdToken: async () => {
+      const user = await firebaseConfig.authReady;
+      if (!user) throw new Error('no-auth');
+      return user.getIdToken();
+    },
+    notify: (message) => showToast(message, true),
+  });
+}
+
+/** Tear the voice widget down (leave the call, reset the button). */
+function stopVoice() {
+  if (!voiceWidget) return;
+  try { voiceWidget.stop(); } catch (_) {}
 }
 
 /** Authoritative context required to reject stale or malformed chair claims. */
