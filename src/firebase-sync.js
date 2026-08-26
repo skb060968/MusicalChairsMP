@@ -136,11 +136,16 @@ export async function createRoom(hostName, avatar) {
   throw new Error('Could not create a unique room code. Please try again.');
 }
 
+function isPermissionDenied(error) {
+  const blob = `${error?.code || ''} ${error?.message || ''}`.toLowerCase();
+  return blob.includes('permission');
+}
+
 /**
- * Atomically reserves the lowest free player slot and avatar on the players
- * collection. The room preflight gives clear errors; security rules recheck
- * lobby/schema state when the transaction commits, so a concurrent start is
- * denied without replacing any existing player.
+ * Reserves the lowest free player slot with a PER-CHILD create transaction.
+ * Each attempt writes only its own `players/player_N` node, so it can never
+ * displace another player; the rules' per-slot validate still enforces a unique
+ * uid and avatar. The room preflight and re-reads give clear, specific errors.
  */
 export async function joinRoom(roomCode, playerName, avatar) {
   const uid = await getAuthUid();
@@ -153,58 +158,58 @@ export async function joinRoom(roomCode, playerName, avatar) {
   assertSupportedRoom(room);
   if (room.meta?.status !== 'lobby') throw new Error('Game already started');
 
-  let reservedIndex = -1;
-  let abortReason = 'join-conflict';
-  const playersRef = ref(db, `${GAME_ID}-rooms/${roomCode}/players`);
-  const result = await runTransaction(playersRef, (currentPlayers) => {
-    reservedIndex = -1;
-    const players = currentPlayers && typeof currentPlayers === 'object'
-      ? currentPlayers
-      : {};
-    const occupied = Object.keys(players)
-      .map((key) => playerIndexFromKey(key))
-      .filter((index) => index >= 0);
+  let players = room.players || {};
 
-    if (occupied.length >= MAX_PLAYERS) {
-      abortReason = 'room-full';
-      return undefined;
-    }
-    if (selectedAvatar && isAvatarTaken(players, selectedAvatar)) {
-      abortReason = 'avatar-taken';
-      return undefined;
-    }
-
-    const nextIndex = Array.from({ length: MAX_PLAYERS }, (_, index) => index)
-      .find((index) => !occupied.includes(index));
-    if (!Number.isInteger(nextIndex)) {
-      abortReason = 'room-full';
-      return undefined;
-    }
-
-    reservedIndex = nextIndex;
-    abortReason = '';
-    return {
-      ...players,
-      [`player_${nextIndex}`]: {
-        name: playerName,
-        uid,
-        connected: true,
-        eliminated: false,
-        ...(selectedAvatar ? { emoji: selectedAvatar } : {}),
-      },
-    };
-  }, { applyLocally: false });
-
-  if (!result.committed || reservedIndex < 0) {
-    if (abortReason === 'avatar-taken') throw new Error('That avatar is already taken');
-    if (abortReason === 'room-full') throw new Error(`Room is full (${MAX_PLAYERS} players maximum)`);
-    throw new Error('Could not reserve a player slot. Please try again.');
+  // Already in this room (e.g. re-open) — keep the existing slot.
+  const ownedKey = Object.keys(players).find((key) => players[key]?.uid === uid);
+  if (ownedKey) return { playerIndex: playerIndexFromKey(ownedKey) };
+  if (selectedAvatar && isAvatarTaken(players, selectedAvatar)) {
+    throw new Error('That avatar is already taken');
   }
 
-  await update(ref(db, `${GAME_ID}-rooms/${roomCode}/meta`), {
-    lastActivity: serverTimestamp(),
-  });
-  return { playerIndex: reservedIndex };
+  const record = {
+    name: playerName,
+    uid,
+    connected: true,
+    eliminated: false,
+    ...(selectedAvatar ? { emoji: selectedAvatar } : {}),
+  };
+  const playersRef = ref(db, `${GAME_ID}-rooms/${roomCode}/players`);
+
+  for (let index = 1; index < MAX_PLAYERS; index += 1) {
+    const key = `player_${index}`;
+    if (players[key]) continue;
+    try {
+      const result = await runTransaction(
+        ref(db, `${GAME_ID}-rooms/${roomCode}/players/${key}`),
+        (current) => (current === null ? record : undefined),
+        { applyLocally: false },
+      );
+      if (result.committed) {
+        await update(ref(db, `${GAME_ID}-rooms/${roomCode}/meta`), {
+          lastActivity: serverTimestamp(),
+        });
+        return { playerIndex: index };
+      }
+      // Slot taken between our read and the write — refresh and try the next.
+      players = (await get(playersRef)).val() || {};
+    } catch (error) {
+      if (!isPermissionDenied(error)) throw error;
+      // Rules rejected (slot raced, avatar taken, or the lobby just closed).
+      players = (await get(playersRef)).val() || {};
+      const mine = Object.keys(players).find((k) => players[k]?.uid === uid);
+      if (mine) return { playerIndex: playerIndexFromKey(mine) };
+      if (selectedAvatar && isAvatarTaken(players, selectedAvatar)) {
+        throw new Error('That avatar is already taken');
+      }
+      const status = (await get(ref(db, `${GAME_ID}-rooms/${roomCode}/meta/status`))).val();
+      if (status !== 'lobby') throw new Error('Game already started');
+    }
+  }
+
+  const occupied = Object.keys(players).filter((k) => /^player_[0-7]$/.test(k)).length;
+  if (occupied >= MAX_PLAYERS) throw new Error(`Room is full (${MAX_PLAYERS} players maximum)`);
+  throw new Error('Could not reserve a player slot. Please try again.');
 }
 
 /** Returns the exact unsubscribe function supplied by the Firebase SDK. */
