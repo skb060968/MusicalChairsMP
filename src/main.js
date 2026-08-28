@@ -85,16 +85,11 @@ import {
 } from './deep-link-handler.js';
 
 import {
-  onConnectionChange,
-  onReconnect,
-  getConnectionStatus,
   isOnline,
-  startConnectionMonitor,
   logError,
   withRetry,
   withReadRetry,
   setErrorContextProvider,
-  CONNECTION_RESTORED_MESSAGE,
 } from './firebase-recovery.js';
 
 // ── Tasks 6.2 - 6.6 ─────────────────────────────────────────────────────────
@@ -213,9 +208,8 @@ let currentScreenId = SCREENS.MENU;
 let toastHideTimer = null;
 let toastCleanupTimer = null;
 
-/** Last message surfaced from each status channel — suppresses duplicate toasts. */
+/** Last message surfaced from the audio status channel — suppresses duplicate toasts. */
 let lastAudioMessage = null;
-let lastConnectionMessage = null;
 
 /** Room code recovered from a `?room=ABCD` deep link; consumed by task 6.2. */
 let deepLinkRoomCode = null;
@@ -341,19 +335,6 @@ let holdingResolution = false;
 
 /** Local marker: the room has no connected players left (Req 17.1). */
 let roomAbandoned = false;
-
-/** Phase-stall watchdog (Req 16.5, design §Timing and Synchronization Errors). */
-let stallWatchdogTimer = null;
-let watchedPhase = null;
-let watchedRound = 0;
-let watchedSince = 0;
-
-/** Ownership of `#loadingOverlay` while the syncing overlay is up. */
-let syncOverlayOwned = false;
-let syncOverlaySince = 0;
-let syncOverlayMessage = null;
-/** The Refresh button injected into `.loading-content` past the 10s stall mark. */
-let refreshActionButton = null;
 
 /** Teardown for the action handlers on the update toast (SECTION 14). */
 let updateToastCleanup = null;
@@ -656,33 +637,6 @@ function initAudioStatusWiring() {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// SECTION 6 — CONNECTION STATUS WIRING
-// ═════════════════════════════════════════════════════════════════════════════
-
-/**
- * Make connection loss and restoration visible (Req 16.3, 16.4).
- *
- * `firebase-recovery.js` already owns the retry/resync logic and pre-formats the
- * copy, so this only mirrors `status.message` into a toast: an error toast while
- * offline, a neutral one while resyncing.
- */
-function initConnectionStatusWiring() {
-  const unsubscribe = onConnectionChange((status) => {
-    if (!status) return;
-
-    if (!status.message) {
-      lastConnectionMessage = null;
-      return;
-    }
-    if (status.message === lastConnectionMessage) return;
-    lastConnectionMessage = status.message;
-    showToast(status.message, !status.online);
-  });
-
-  teardownCallbacks.push(unsubscribe);
-}
-
-// ═════════════════════════════════════════════════════════════════════════════
 // SECTION 7 — BOOTSTRAP / DOMContentLoaded
 // ═════════════════════════════════════════════════════════════════════════════
 
@@ -767,7 +721,6 @@ async function bootstrap() {
   initScreenNavigation();
   initMuteToggle();
   initAudioStatusWiring();
-  initConnectionStatusWiring();
 
   initAudio();
 
@@ -775,14 +728,10 @@ async function bootstrap() {
 
   await initFirebase();
 
-  // Resolves false in a jsdom/offline context and stays dormant — never throws.
-  startConnectionMonitor().catch((error) => logError('startConnectionMonitor', error, {}));
-
   initDeepLink();
 
-  // Tasks 7.2 / 7.3 / 8.2 — session recovery, the reconnect hook and the
-  // phase-stall watchdog (SECTION 13). Wiring first, then the rejoin attempt,
-  // so a room restored below is already covered by both.
+  // Task 7.2 — session recovery: presence re-announce wiring, then the rejoin
+  // attempt, so a room restored below is already covered.
   initSessionRecovery();
 
   // A deep link is an explicit "join this room" instruction and outranks the
@@ -3535,31 +3484,11 @@ const RECONNECT_GRACE_MS = 5000;
 /** Minimum spacing between `connected: true` self-heal writes. */
 const CONNECTED_REASSERT_THROTTLE_MS = 2000;
 
-/** A phase transition later than this is a stall (design §Timing, Req 16.5). */
-const PHASE_STALL_MS = 2000;
-
-/** Total stall after which the overlay offers a Refresh action. */
-const PHASE_STALL_REFRESH_MS = 10000;
-
-/** Watchdog cadence. Cheap: one comparison per tick unless a stall is live. */
-const STALL_POLL_MS = 500;
-
-/** Exact copy from design §Timing and Synchronization Errors. */
-const SYNCING_MESSAGE = 'Syncing game state...';
-
 /** Zero connected players plus this much silence reads as abandoned locally. */
 const ROOM_ABANDONED_IDLE_MS = 60 * 1000;
 
 /** Longer dwell for the "reconnected" confirmation than a routine toast. */
 const REJOIN_TOAST_MS = 4000;
-
-/**
- * Longest legal music phase, used when `musicDuration` has not arrived yet.
- * Must track {@link MUSIC_DURATION_MAX_MS}: if it were smaller, the stall
- * watchdog would raise a false "Syncing game state..." overlay part-way through
- * a perfectly normal music phase.
- */
-const MUSIC_STALL_FALLBACK_MS = MUSIC_DURATION_MAX_MS;
 
 /* ------------------------------ room helpers ------------------------------ */
 
@@ -3805,34 +3734,6 @@ async function reassertConnected(reason) {
 }
 
 /**
- * Connection-restored hook (Req 11.3, 16.4).
- *
- * `firebase-recovery.onReconnect` awaits the returned promise inside its 2
- * second resync budget and calls `markResynced()` for us, so this must stay
- * short: re-arm the things a dropped socket loses, then re-announce ourselves.
- * The room listener re-attaches on its own — it is only restarted if it was
- * torn down while offline.
- *
- * @param {{downtimeMs: number|null, reconnectCount: number, deadlineMs: number}} info
- * @returns {Promise<void>}
- */
-async function handleReconnect(info) {
-  if (!gameState.roomCode || leavingRoom) return;
-
-  clearRoomLifecycleTimers();
-  const restored = await reassertConnected('reconnect');
-  if (restored) await attachDisconnectHandler();
-  if (!unsubscribeRoom) startRoomListener(gameState.roomCode);
-  scheduleHostLossCleanup();
-
-  if (currentGame) {
-    renderedPhase = null;
-    updateGameFromFirebase(currentGame);
-  }
-  console.log(`[ui] resynced room ${gameState.roomCode} after ${info?.downtimeMs ?? '?'}ms offline`);
-}
-
-/**
  * React to a `players` snapshot (Req 11.1, 11.2, 11.4, 11.6, 16.5, 17.1).
  * Called from {@link handlePlayersUpdate}, so it sees every connection change
  * Firebase reports — which is inside the 5 second detection budget because
@@ -3982,7 +3883,6 @@ function clearReconnectGraceTimer() {
 function clearRecoveryTimers() {
   releaseResolutionHold();
   reconnectGraceRound = 0;
-  releaseSyncOverlay();
 }
 
 /* ------------------ task 8.2: critical errors & phase stalls --------------- */
@@ -4004,188 +3904,14 @@ export function failToMenu(message, error, context = 'criticalError') {
   showCriticalError(message, error, context);
 }
 
-/**
- * Expected wall-clock length of a phase, from the moment this device first sees
- * it. Used to decide whether a phase transition is overdue.
- *
- * @param {string} phase - One of {@link PHASES}
- * @returns {number|null} Budget in ms, or null when the phase has no deadline
- */
-function phaseBudgetMs(phase) {
-  switch (phase) {
-    case PHASES.MUSIC:
-      return Number.isFinite(gameState.musicDuration) && gameState.musicDuration > 0
-        ? gameState.musicDuration
-        : MUSIC_STALL_FALLBACK_MS;
-    // The 10 second deadline, plus the grace window a late disconnect can
-    // legitimately add on the host (see {@link updateReconnectGrace}).
-    case PHASES.CLAIMING:
-      return CLAIM_PHASE_TIMEOUT_MS + RECONNECT_GRACE_MS;
-    case PHASES.ELIMINATION:
-      return ELIMINATION_ANIMATION_MS;
-    // Defensive budget for legacy-v1 or malformed state; schema-v2 starts
-    // atomically in the music phase.
-    case PHASES.LOBBY:
-      return 0;
-    default:
-      return null; // victory: nothing further is expected
-  }
-}
-
-/**
- * Watch for a phase that overstays its budget (Req 16.5, design §Phase
- * Transition Delay): overlay at 2 seconds past due, Refresh action at 10.
- *
- * Polled rather than event-driven on purpose — the failure being detected is
- * "no further Firebase updates arrive", so a detector that only runs on
- * Firebase updates would never fire. `resyncOverdue` from firebase-recovery is
- * folded in as a second signal, because a resync that blew its 2 second budget
- * (Req 16.4) is a stall whether or not the phase clock says so.
- */
-function stallWatchdogTick() {
-  if (!gameState.roomCode || leavingRoom || getCurrentScreen() !== SCREENS.GAME) {
-    watchedPhase = null;
-    watchedRound = 0;
-    releaseSyncOverlay();
-    return;
-  }
-
-  const phase = gameState.phase;
-  const round = gameState.round;
-  if (phase !== watchedPhase || round !== watchedRound) {
-    watchedPhase = phase;
-    watchedRound = round;
-    watchedSince = Date.now();
-    releaseSyncOverlay();
-    return;
-  }
-
-  const budget = phaseBudgetMs(phase);
-  const status = getConnectionStatus();
-  if (budget === null) {
-    releaseSyncOverlay();
-    return;
-  }
-
-  const overdueBy = Date.now() - watchedSince - budget;
-  if (overdueBy <= PHASE_STALL_MS && !status.resyncOverdue) {
-    releaseSyncOverlay();
-    return;
-  }
-
-  const message = (status.resyncPending || status.resyncOverdue)
-    ? CONNECTION_RESTORED_MESSAGE
-    : SYNCING_MESSAGE;
-  if (!claimSyncOverlay(message)) return;
-
-  // The overlay appears at PHASE_STALL_MS, so this lands at PHASE_STALL_REFRESH_MS
-  // of total stall.
-  if (Date.now() - syncOverlaySince >= PHASE_STALL_REFRESH_MS - PHASE_STALL_MS) {
-    injectRefreshAction();
-  }
-}
-
-/**
- * Take ownership of `#loadingOverlay` for the syncing message.
- *
- * The overlay is shared with the join/start/reset flows, so it is only claimed
- * when it is currently hidden. An overlay another flow put up is left alone —
- * and never hidden by {@link releaseSyncOverlay}.
- *
- * @param {string} message
- * @returns {boolean} true when the overlay is ours
- */
-function claimSyncOverlay(message) {
-  const overlay = document.getElementById('loadingOverlay');
-  if (!overlay) return false;
-
-  if (!syncOverlayOwned) {
-    if (!overlay.hasAttribute('hidden')) return false;
-    syncOverlayOwned = true;
-    syncOverlaySince = Date.now();
-    syncOverlayMessage = null;
-  }
-  if (syncOverlayMessage !== message) {
-    syncOverlayMessage = message;
-    showLoading(message);
-  }
-  return true;
-}
-
-/** Hand the overlay back, if it was ours. */
-function releaseSyncOverlay() {
-  if (!syncOverlayOwned) return;
-  removeRefreshAction();
-  syncOverlayOwned = false;
-  syncOverlayMessage = null;
-  syncOverlaySince = 0;
-  hideLoading();
-}
-
-/**
- * Add a Refresh button to the loading overlay for a stall past 10 seconds
- * (design §Phase Transition Delay).
- *
- * index.html is a fixed contract with no error screen and no refresh control,
- * so the button is built here and appended to `#loadingOverlay .loading-content`
- * (a flex column, so it lays out under the spinner and message with no CSS
- * changes). It carries `.menu-btn.primary` for the existing look, and it is
- * removed again with the overlay so nothing lingers in the DOM.
- */
-function injectRefreshAction() {
-  if (refreshActionButton && refreshActionButton.isConnected) return;
-
-  const content = document.querySelector('#loadingOverlay .loading-content');
-  if (!content) return;
-
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.className = 'menu-btn primary';
-  button.textContent = '🔄 Refresh';
-  button.setAttribute('aria-label', 'Refresh the page to resynchronize the game');
-  button.addEventListener('click', () => {
-    try { window.location.reload(); } catch (_) {}
-  });
-
-  content.appendChild(button);
-  refreshActionButton = button;
-  // The overlay is role="alert"; move focus so the escape hatch is reachable
-  // without hunting for it.
-  try { button.focus({ preventScroll: true }); } catch (_) {}
-}
-
-/** Remove the injected Refresh button. */
-function removeRefreshAction() {
-  if (!refreshActionButton) return;
-  try { refreshActionButton.remove(); } catch (_) {}
-  refreshActionButton = null;
-}
-
 /* ------------------------------- section init ----------------------------- */
 
 /**
- * Wire the recovery hooks. Called from {@link bootstrap} before
- * {@link attemptAutoRejoin}, and every subscription/timer it creates is
- * registered in `teardownCallbacks` so {@link teardownUI} releases them.
+ * Wire the presence re-announce. Called from {@link bootstrap} before
+ * {@link attemptAutoRejoin}; the listener it adds is registered in
+ * `teardownCallbacks` so {@link teardownUI} releases it.
  */
 function initSessionRecovery() {
-  // Req 16.4 — the resync hook. Returning a promise lets firebase-recovery
-  // hold us to its 2 second budget and call markResynced() itself.
-  teardownCallbacks.push(onReconnect(handleReconnect));
-
-  // Req 16.5 — phase-stall watchdog. Runs for the app's lifetime and no-ops
-  // unless a game screen is up; see {@link stallWatchdogTick}.
-  if (stallWatchdogTimer === null) {
-    stallWatchdogTimer = setInterval(stallWatchdogTick, STALL_POLL_MS);
-  }
-  teardownCallbacks.push(() => {
-    if (stallWatchdogTimer !== null) {
-      clearInterval(stallWatchdogTimer);
-      stallWatchdogTimer = null;
-    }
-    releaseSyncOverlay();
-  });
-
   // Mobile browsers suspend sockets in a background tab; coming back to the
   // foreground is the cheapest moment to re-announce ourselves (Req 11.3).
   const onVisibilityChange = async () => {
