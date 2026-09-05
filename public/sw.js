@@ -1,6 +1,6 @@
 /* Musical Chairs PWA Service Worker */
 
-const CACHE_VERSION = 'v1.25.0';
+const CACHE_VERSION = 'v1.26.0';
 const CACHE_NAME = `musical-chairs-${CACHE_VERSION}`;
 
 const STATIC_ASSETS = [
