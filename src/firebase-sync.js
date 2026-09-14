@@ -24,7 +24,12 @@ const LEGACY_SCHEMA_VERSION = 1;
 
 export const SCHEMA_VERSION = 2;
 export const HOST_LOSS_GRACE_MS = 30000;
-export const PLAYER_AVATARS = Object.freeze(['🐵', '🐱', '🦊', '🐼', '🐸', '🐧', '🦄', '🐯']);
+// Must match BOTH the picker markup in index.html AND the emoji whitelist in
+// musical-chairs-rooms/players/$playerId/emoji. The standard 8-avatar people set
+// replaced the original animals; this constant was missed at the time, which left
+// getSelectedAvatar() returning null and the Create/Join buttons permanently
+// disabled. Order matters: it doubles as the index-based fallback avatar.
+export const PLAYER_AVATARS = Object.freeze(['🥷', '🧙', '🦸', '👷', '🤴', '👸', '🧝', '🧛']);
 
 function requestedAvatar(value) {
   if (value === undefined || value === null) return null;
