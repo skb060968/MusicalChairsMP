@@ -66,6 +66,11 @@
  * Namespace import on purpose. It gives {@link initFirebase} access to the
  * existing `authReady` promise alongside the shared auth and database exports.
  */
+// On-device diagnostics: records failures to localStorage and adds a 5-tap
+// viewer with a Copy button. Import-only integration; must come first so
+// startup errors are captured too.
+import './diagnostics.js';
+
 import * as firebaseConfig from './firebase-config.js';
 
 import {
