@@ -2343,3 +2343,17 @@ summary:focus-visible,
   -webkit-backdrop-filter: blur(10px);
   backdrop-filter: blur(10px);
 }
+
+/* =========================================================
+   DENSE LOBBY (STANDARD, Sep 2026)
+   With 5+ players the list switches to compact rows and scrolls inside a height
+   cap, so the room code and Start / Leave buttons stay on screen on a phone.
+   Driven by the DOM (:has(li:nth-child(5))) — no JS, nothing to keep in sync.
+   ========================================================= */
+.players-list:has(li:nth-child(5)) {
+  max-height: min(40svh, 340px); overflow-y: auto; overscroll-behavior: contain; padding-right: 2px;
+}
+.players-list:has(li:nth-child(5)) .player-item { min-height: 40px; padding: 6px 10px; }
+.players-list:has(li:nth-child(5)) .player-item .player-chair { display: none; }
+/* lobby buttons a notch shorter than the menu's 56px — still a 48px touch target */
+#lobbyScreen .menu-btn { min-height: 48px; padding: 10px 16px; }

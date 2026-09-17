@@ -2409,14 +2409,18 @@ function buildStage({ force = false } = {}) {
   const { chairRadius, orbitRadius } = readStageRadii();
   const active = activeStagePlayerIds();
 
-  // Chairs: N-1, evenly spaced on the inner ring.
+  // Chairs: N-1, evenly spaced on the inner ring. The final round has a single
+  // chair — put it dead centre rather than at 12 o'clock on a one-point "ring",
+  // so both remaining players are equidistant from it.
   const ids = chairIds(chairCountFor(active));
   const chairFragment = document.createDocumentFragment();
   ids.forEach((chairId, index) => {
     const chair = document.createElement('div');
     chair.className = 'chair available';
     chair.dataset.chairId = chairId;
-    const { left, top } = ringPosition(index, ids.length, chairRadius);
+    const { left, top } = ids.length === 1
+      ? { left: 50, top: 50 }
+      : ringPosition(index, ids.length, chairRadius);
     setStagePosition(chair, left, top);
     chairFragment.appendChild(chair);
   });
