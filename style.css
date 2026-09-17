@@ -2320,3 +2320,26 @@ summary:focus-visible,
         transition: none;
     }
 }
+
+/* =========================================================
+   CENTERED CARD (STANDARD — adopted from Dots & Boxes, Sep 2026)
+   Create / Join / Lobby / How-to columns become one translucent card, centred in
+   the viewport. The menu (hero) and the game stage are untouched.
+   ========================================================= */
+/* .app-main already pads the viewport (safe areas + the fixed top controls), so the
+   screen fills what is left of 100svh rather than adding to it. */
+#createRoomScreen.active, #joinRoomScreen.active, #lobbyScreen.active, #instructionsScreen.active {
+  min-height: calc(100svh - var(--safe-top) - var(--safe-bottom) - 80px);
+  justify-content: center;
+}
+.form-container, .lobby-container, .instructions-container {
+  max-width: 460px;
+  padding-top: clamp(14px, 4vw, 24px);
+  padding: clamp(14px, 4vw, 24px);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: clamp(18px, 4vw, 24px);
+  background: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.28);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+}
