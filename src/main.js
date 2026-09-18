@@ -148,6 +148,8 @@ import {
   // Firebase I/O (host-guarded inside game-manager)
   startMusicPhase,
   startClaimPhase,
+  stopMusicWhenDue,
+  PEER_STOP_DELAY_MS,
   claimChair,
   finalizeClaimPhase,
   persistVictory,
@@ -1355,6 +1357,7 @@ function handleMetaUpdate(meta) {
 /** PEERS ONLY — park the round while the host is offline (see handleMetaUpdate). */
 function showHostOfflineHold() {
   clearMusicCountdown();
+  clearPeerStopTimer();
   clearClaimPhaseTimeout();
   endDrag({ reason: 'host-offline' });
   try { stopMusic(); } catch (_) {}
@@ -1974,6 +1977,7 @@ function resetRoundViewState() {
  * timer belongs here — there is no parallel cleanup mechanism.
  */
 function clearGameplayTimers() {
+  clearPeerStopTimer();
   if (eliminationTimer !== null) {
     clearTimeout(eliminationTimer);
     eliminationTimer = null;
@@ -2133,19 +2137,37 @@ function renderMusicPhase(gameData) {
     ? gameData.musicDuration
     : MUSIC_DURATION_MIN_MS;
 
-  // The timer still runs on every device — it is what ends the phase. Only the
-  // host's expiry writes the flip (Req 4.4, 19.2). No onTick handler: nothing
-  // on screen tracks the remaining time any more.
+  // The timer runs on every device and EVERY device may end the phase — the music
+  // is owned by the engine's clock, not by the host, so a host whose phone has gone
+  // to sleep cannot leave the room dancing forever. The host fires first; peers wait
+  // PEER_STOP_DELAY_MS and only act if the phase is still `music` by then. The rules
+  // accept the flip from any member once the server clock agrees the music is over.
+  // No onTick handler: nothing on screen tracks the remaining time any more.
+  const roomCode = gameState.roomCode;
+  const round = gameData.round;
   startMusicCountdown(duration, {
     onExpire: () => {
-      if (!gameState.isHost || isHostLossActive()) return;
-      startClaimPhase(gameState.roomCode).then((result) => {
-        if (!result.ok && !result.skipped) {
-          showToast(result.message || 'Could not stop the music', true);
-        }
-      });
+      if (gameState.isHost && !isHostLossActive()) {
+        startClaimPhase(roomCode).then((result) => {
+          if (!result.ok && !result.skipped) {
+            showToast(result.message || 'Could not stop the music', true);
+          }
+        });
+        return;
+      }
+      peerStopTimer = setTimeout(() => {
+        peerStopTimer = null;
+        if (gameState.roomCode !== roomCode || gameState.phase !== PHASES.MUSIC || gameState.round !== round) return;
+        stopMusicWhenDue(roomCode).catch((error) => logError('stopMusicWhenDue', error, { roomCode, round }));
+      }, PEER_STOP_DELAY_MS);
     },
   });
+}
+
+/** Peer-side "stop the music if the host didn't" timer (see renderMusicPhase). */
+let peerStopTimer = null;
+function clearPeerStopTimer() {
+  if (peerStopTimer !== null) { clearTimeout(peerStopTimer); peerStopTimer = null; }
 }
 
 /**
@@ -2156,6 +2178,7 @@ function renderMusicPhase(gameData) {
  */
 function renderClaimingPhase(gameData) {
   clearMusicCountdown();
+  clearPeerStopTimer();
   unlockGameControls();
   clearEliminationBanner();
 

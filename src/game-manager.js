@@ -337,7 +337,7 @@ async function loadDatabase() {
     import('./firebase-config.js'),
     import('firebase/database'),
   ]);
-  return { db: config.db, ref: rtdb.ref, update: rtdb.update };
+  return { db: config.db, ref: rtdb.ref, update: rtdb.update, runTransaction: rtdb.runTransaction };
 }
 
 /**
@@ -571,6 +571,39 @@ export async function startClaimPhase(roomCode, options = {}) {
     error: result.error,
     message: result.message ?? null,
   };
+}
+
+/** Peers wait this long past the deadline before stopping the music themselves, so a
+ *  present host normally wins the race and peers only act when it didn't. */
+export const PEER_STOP_DELAY_MS = 750;
+
+/**
+ * ANY connected player: flip `music` → `claiming` once the music is over by the
+ * shared clock. The music phase is owned by the game engine, not the host — a
+ * host whose phone is asleep must not leave everyone dancing forever. The rules
+ * accept this write from any member once `now >= musicStartTime + musicDuration`
+ * and only if nothing else in `game` changes; a transaction pinned on the phase
+ * means that when several devices fire together, one commit lands and the rest
+ * abort quietly.
+ *
+ * @param {string} roomCode
+ * @returns {Promise<boolean>} true if this device performed the flip
+ */
+export async function stopMusicWhenDue(roomCode) {
+  const { db, ref, runTransaction } = await loadDatabase();
+  try {
+    const result = await runTransaction(ref(db, roomPath(roomCode, 'game')), (game) => {
+      if (!game || game.phase !== PHASES.MUSIC) return undefined;
+      if (!Number.isFinite(game.musicStartTime) || !Number.isFinite(game.musicDuration)) return undefined;
+      return { ...game, phase: PHASES.CLAIMING };
+    }, { applyLocally: false });
+    return Boolean(result.committed) && result.snapshot?.val()?.phase === PHASES.CLAIMING;
+  } catch (error) {
+    // Losing the race (another device already flipped it) surfaces as a denied
+    // write — expected, not an error worth showing.
+    if (String(error?.code || error?.message || '').toLowerCase().includes('permission')) return false;
+    throw error;
+  }
 }
 
 /* -------------------------------- timers -------------------------------- */
