@@ -337,7 +337,7 @@ async function loadDatabase() {
     import('./firebase-config.js'),
     import('firebase/database'),
   ]);
-  return { db: config.db, ref: rtdb.ref, get: rtdb.get, update: rtdb.update, runTransaction: rtdb.runTransaction };
+  return { db: config.db, ref: rtdb.ref, update: rtdb.update };
 }
 
 /**
@@ -590,18 +590,14 @@ export const PEER_STOP_DELAY_MS = 750;
  * @returns {Promise<boolean>} true if this device performed the flip
  */
 export async function stopMusicWhenDue(roomCode) {
-  const { db, ref, get, runTransaction } = await loadDatabase();
-  const gameRef = ref(db, roomPath(roomCode, 'game'));
+  const { db, ref, update } = await loadDatabase();
   try {
-    // A transaction is first run against the local cache; with nothing cached it
-    // sees null and aborts without asking the server. Prime it.
-    await get(gameRef);
-    const result = await runTransaction(gameRef, (game) => {
-      if (!game || game.phase !== PHASES.MUSIC) return undefined;
-      if (!Number.isFinite(game.musicStartTime) || !Number.isFinite(game.musicDuration)) return undefined;
-      return { ...game, phase: PHASES.CLAIMING };
-    }, { applyLocally: false });
-    return Boolean(result.committed) && result.snapshot?.val()?.phase === PHASES.CLAIMING;
+    // A plain single-field write: the RULES are the guard (phase must still be
+    // `music`, the deadline must have passed, nothing else may change). A local
+    // transaction would depend on what this client happens to have cached; the
+    // server-side check does not.
+    await update(ref(db, roomPath(roomCode, 'game')), { phase: PHASES.CLAIMING });
+    return true;
   } catch (error) {
     // Losing the race (another device already flipped it) surfaces as a denied
     // write — expected, not an error worth showing.
