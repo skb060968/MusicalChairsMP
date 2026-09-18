@@ -23,7 +23,10 @@ const CREATE_ROOM_MAX_ATTEMPTS = 10;
 const LEGACY_SCHEMA_VERSION = 1;
 
 export const SCHEMA_VERSION = 2;
-export const HOST_LOSS_GRACE_MS = 30000;
+// How long the host may stay offline before a peer may delete the room. Mirrors the
+// 15 s grace every other game uses; the rules pin the same figure
+// (`meta/hostDisconnectedAt <= now - 15000` in the room `.write`).
+export const HOST_LOSS_GRACE_MS = 15000;
 // Must match BOTH the picker markup in index.html AND the emoji whitelist in
 // musical-chairs-rooms/players/$playerId/emoji. The standard 8-avatar people set
 // replaced the original animals; this constant was missed at the time, which left

@@ -1335,12 +1335,35 @@ function handleMetaUpdate(meta) {
   updateStartButtonState(currentPlayers);
   if (getCurrentScreen() === SCREENS.VICTORY) renderVictoryContent();
 
-  // A recovered host may have watched its old phase timer expire while blocked.
-  // Re-entering the phase after the atomic marker clear safely re-arms it.
-  if (wasBlocked && !isHostLossActive() && gameState.isHost && currentGame) {
+  // Peers, mid-game: the host is the only device that can stop the music or
+  // resolve a phase, so the moment the host drops, freeze the round visibly —
+  // music off, ring parked, and a line saying why — rather than letting the
+  // music play on until the room is deleted after the grace period.
+  if (!wasBlocked && isHostLossActive() && !gameState.isHost && getCurrentScreen() === SCREENS.GAME) {
+    showHostOfflineHold();
+  }
+
+  // Recovery (host or peer): the marker cleared, so re-enter the current phase
+  // from the authoritative game node. For the host this re-arms the phase timer
+  // it watched expire while blocked; for peers it restarts the music/ring.
+  if (wasBlocked && !isHostLossActive() && currentGame) {
     renderedPhase = null;
     updateGameFromFirebase(currentGame);
   }
+}
+
+/** PEERS ONLY — park the round while the host is offline (see handleMetaUpdate). */
+function showHostOfflineHold() {
+  clearMusicCountdown();
+  clearClaimPhaseTimeout();
+  endDrag({ reason: 'host-offline' });
+  try { stopMusic(); } catch (_) {}
+  setMusicIndicatorVisible(false);
+  setStageMode('idle');
+  const secs = Math.round(HOST_LOSS_GRACE_MS / 1000);
+  setPhaseText('⚠️ Host went offline');
+  setStageHint(`Waiting for the host to come back — the room closes in ${secs} s if they don't.`);
+  showToast(`The host went offline. Room closes in ${secs} s unless they return.`, true);
 }
 
 function handleRankingsUpdate(rankings) {
@@ -2079,8 +2102,8 @@ function renderPhase(phase, gameData, changed) {
  * Music phase: audio on, animated indicator, avatars orbiting OUTSIDE the chair
  * ring (Req 4.5, 5.1, 14.5).
  *
- * Deliberately shows no time-remaining readout. The music stops at a random
- * point in a 30-60s window and not knowing when is the whole game, so the only
+ * Deliberately shows no time-remaining readout. The music stops after 10, 20 or
+ * 30 s (picked at random) and not knowing which is the whole game, so the only
  * cues are the animated indicator and the spinning ring.
  *
  * @param {Object} gameData - Firebase `game` node

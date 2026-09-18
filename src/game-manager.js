@@ -294,11 +294,16 @@ export function hasEnoughPlayers(players) {
 // Firebase I/O (host only): startMusicPhase, startClaimPhase
 // Timers: startMusicCountdown / clearMusicCountdown
 
-/** Shortest music phase, in ms (Req 4.1). Firebase rules reject anything less. */
-export const MUSIC_DURATION_MIN_MS = 30000;
+/** The music runs for exactly one of these (Req 4.1). Firebase rules accept ONLY these
+ *  three values (plus 0 in the lobby) — change both together or every music-phase
+ *  write is rejected. Was a continuous 30–60 s; shortened to keep rounds brisk. */
+export const MUSIC_DURATION_CHOICES_MS = Object.freeze([10000, 20000, 30000]);
 
-/** Longest music phase, in ms (Req 4.1). Firebase rules reject anything more. */
-export const MUSIC_DURATION_MAX_MS = 60000;
+/** Shortest music phase, in ms (Req 4.1). */
+export const MUSIC_DURATION_MIN_MS = MUSIC_DURATION_CHOICES_MS[0];
+
+/** Longest music phase, in ms (Req 4.1). */
+export const MUSIC_DURATION_MAX_MS = MUSIC_DURATION_CHOICES_MS[MUSIC_DURATION_CHOICES_MS.length - 1];
 
 /** Optional remaining-time tick cadence; an independent timeout controls expiry. */
 export const MUSIC_TICK_INTERVAL_MS = 100;
@@ -385,19 +390,22 @@ function isPermissionDenied(error) {
 /* ------------------------------- pure logic ------------------------------ */
 
 /**
- * Random music duration for a round (Req 4.1, Property 6).
- * Integer milliseconds in the inclusive range [30000, 60000] — the same range
- * the deployed Firebase rules validate `game/musicDuration` against. Change one
- * and you MUST change the other, or every music-phase write is rejected.
+ * Random music duration for a round (Req 4.1, Property 6): one of
+ * MUSIC_DURATION_CHOICES_MS (10 s, 20 s or 30 s), equally likely. The deployed
+ * Firebase rules validate `game/musicDuration` against the same three values.
  *
  * @param {() => number} [random=Math.random] - Injectable RNG for tests
- * @returns {number} Integer in [MUSIC_DURATION_MIN_MS, MUSIC_DURATION_MAX_MS]
+ * @returns {number} One of MUSIC_DURATION_CHOICES_MS
  */
 export function generateMusicDuration(random = Math.random) {
-  const span = MUSIC_DURATION_MAX_MS - MUSIC_DURATION_MIN_MS + 1;
   const roll = typeof random === 'function' ? random() : Math.random();
   const safe = Number.isFinite(roll) ? Math.min(Math.max(roll, 0), 0.9999999999) : 0;
-  return MUSIC_DURATION_MIN_MS + Math.floor(safe * span);
+  return MUSIC_DURATION_CHOICES_MS[Math.floor(safe * MUSIC_DURATION_CHOICES_MS.length)];
+}
+
+/** True for a duration the rules will accept in a live phase. */
+export function isValidMusicDuration(value) {
+  return MUSIC_DURATION_CHOICES_MS.includes(value);
 }
 
 /**
@@ -452,9 +460,7 @@ export function toFirebaseGameState(state) {
   const activePlayerIds = uniqueIds(src.activePlayerIds).filter(isValidWinnerId);
   const eliminatedThisRound = uniqueIds(src.eliminatedThisRound)
     .filter((id) => isValidWinnerId(id) && !activePlayerIds.includes(id));
-  const duration = Number.isInteger(src.musicDuration)
-    && (src.musicDuration === 0
-      || (src.musicDuration >= MUSIC_DURATION_MIN_MS && src.musicDuration <= MUSIC_DURATION_MAX_MS))
+  const duration = src.musicDuration === 0 || isValidMusicDuration(src.musicDuration)
     ? src.musicDuration
     : 0;
 
