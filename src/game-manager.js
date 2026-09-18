@@ -337,7 +337,7 @@ async function loadDatabase() {
     import('./firebase-config.js'),
     import('firebase/database'),
   ]);
-  return { db: config.db, ref: rtdb.ref, update: rtdb.update, runTransaction: rtdb.runTransaction };
+  return { db: config.db, ref: rtdb.ref, get: rtdb.get, update: rtdb.update, runTransaction: rtdb.runTransaction };
 }
 
 /**
@@ -590,9 +590,13 @@ export const PEER_STOP_DELAY_MS = 750;
  * @returns {Promise<boolean>} true if this device performed the flip
  */
 export async function stopMusicWhenDue(roomCode) {
-  const { db, ref, runTransaction } = await loadDatabase();
+  const { db, ref, get, runTransaction } = await loadDatabase();
+  const gameRef = ref(db, roomPath(roomCode, 'game'));
   try {
-    const result = await runTransaction(ref(db, roomPath(roomCode, 'game')), (game) => {
+    // A transaction is first run against the local cache; with nothing cached it
+    // sees null and aborts without asking the server. Prime it.
+    await get(gameRef);
+    const result = await runTransaction(gameRef, (game) => {
       if (!game || game.phase !== PHASES.MUSIC) return undefined;
       if (!Number.isFinite(game.musicStartTime) || !Number.isFinite(game.musicDuration)) return undefined;
       return { ...game, phase: PHASES.CLAIMING };
