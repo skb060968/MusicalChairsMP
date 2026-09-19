@@ -30,10 +30,14 @@ everyone still standing is offline) ─▶ reveal (3.5 s) ─▶ next round … 
 | `src/firebase-sync.js` | Room lifecycle, presence, `advanceGame` (transaction), `claimChair`, server clock |
 | `src/main.js` | Screens, lobby, the deadline loop (`scheduleTransition` / `fireTransition`), results |
 | `src/ui.js` | Sound + music, the stage (ring, chairs, avatars, drag/tap), roster |
-| `rules-generator.mjs` | Generates the `chairs-rooms` block into `../firebase-rules.json` (enumerates 8 seats) |
 
 Firebase project `skb-games`, room block `chairs-rooms`. Shared `.env` and
 `firebase-rules.json` live one level up; `vite.config.js` points `envDir` there.
+
+Local-only tooling (gitignored, not deployed): `rules-generator.mjs` regenerates the
+`chairs-rooms` block into `../firebase-rules.json`; `scripts/rules-mirror.mjs` checks the
+engine's outputs against a JS re-implementation of the rules; `scripts/live-probe.mjs`
+drives two anonymous clients against the published rules (`node scripts/live-probe.mjs`).
 
 ## Develop
 

@@ -3,6 +3,9 @@ dist/
 .env
 .env.local
 .DS_Store
+# Local rules tooling (probe / mirror / generator) — not part of the app
+scripts/
+rules-generator.mjs
 *.log
 .kiro/
 

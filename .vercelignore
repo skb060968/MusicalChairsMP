@@ -6,3 +6,5 @@ node_modules
 *.md
 README.md
 firebase-rules.json
+scripts
+rules-generator.mjs
