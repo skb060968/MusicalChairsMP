@@ -10,7 +10,7 @@
  *   1. Place an empty container in the game screen, e.g. <div id="voice-widget"></div>
  *   2. mountVoiceChat({
  *        mount: '#voice-widget',
- *        game: 'musicalchairs',           // per-game id (namespaces the LiveKit room)
+ *        game: 'snl',                     // per-game id (namespaces the LiveKit room)
  *        getRoomCode: () => roomCode,     // current 4-letter code
  *        getIdentity: () => `player_${playerIndex}`,
  *        getDisplayName: () => playerName,
@@ -19,7 +19,7 @@
  *        notify: (msg) => showToast(msg), // optional: surface errors/prompts
  *      });
  *   3. Prereqs: VITE_LIVEKIT_URL env, livekit-client dep, /api/livekit-token,
- *      vercel.json Permissions-Policy `microphone=(self)` (or none), SW bypass for /api/.
+ *      vercel.json Permissions-Policy `microphone=(self)`, SW bypass for /api/.
  */
 
 import { createLiveKitVoice } from './voice-livekit.js';

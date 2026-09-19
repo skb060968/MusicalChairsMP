@@ -1,6 +1,12 @@
 import { initializeApp } from 'firebase/app';
 import { getDatabase } from 'firebase/database';
-import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import {
+  browserLocalPersistence,
+  getAuth,
+  onAuthStateChanged,
+  setPersistence,
+  signInAnonymously,
+} from 'firebase/auth';
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -16,54 +22,28 @@ const app = initializeApp(firebaseConfig);
 export const db = getDatabase(app);
 export const auth = getAuth(app);
 
-/**
- * Resolves once one stable anonymous identity is ready for RTDB authorization.
- * A persisted user is reused; anonymous sign-in starts only after Auth reports
- * no current user. This avoids replacing the identity while a room payload is
- * being prepared with ownership fields tied to `auth.uid`.
- */
-export const authReady = new Promise((resolve) => {
-  let settled = false;
-  let signInStarted = false;
+/** Restores the durable anonymous identity before creating a new one. */
+export const authReady = new Promise((resolve, reject) => {
   let unsubscribe = () => {};
-
-  const finish = async (user) => {
-    if (settled) return;
-    settled = true;
+  let signInStarted = false;
+  const timeout = setTimeout(() => {
     unsubscribe();
-
-    if (user && typeof user.getIdToken === 'function') {
-      try {
-        await user.getIdToken();
-      } catch (err) {
-        console.error('Auth token error:', err);
-        resolve(null);
-        return;
-      }
-    }
-    resolve(user || null);
+    reject(new Error('Authentication timed out. Check your connection and reload.'));
+  }, 15000);
+  const finish = (fn, value) => {
+    clearTimeout(timeout);
+    unsubscribe();
+    fn(value);
   };
 
-  unsubscribe = onAuthStateChanged(
-    auth,
-    (user) => {
-      if (user) {
-        finish(user);
-        return;
+  setPersistence(auth, browserLocalPersistence).then(() => {
+    unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (user?.uid) {
+        finish(resolve, user);
+      } else if (!signInStarted) {
+        signInStarted = true;
+        signInAnonymously(auth).catch((error) => finish(reject, error));
       }
-      if (signInStarted) return;
-
-      signInStarted = true;
-      signInAnonymously(auth)
-        .then((credential) => finish(credential.user))
-        .catch((err) => {
-          console.error('Auth error:', err);
-          finish(null);
-        });
-    },
-    (err) => {
-      console.error('Auth error:', err);
-      finish(null);
-    },
-  );
+    }, (error) => finish(reject, error));
+  }).catch((error) => finish(reject, error));
 });

@@ -1,9 +1,8 @@
 node_modules
-dist
-.kiro
 .env
-.env.local
-.env.*.local
+.git
+*.log
+.kiro
+*.md
+README.md
 firebase-rules.json
-tests
-*.bak

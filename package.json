@@ -1,41 +1,34 @@
 {
   "name": "musical-chairs",
   "version": "1.0.0",
-  "description": "Musical Chairs — real-time multiplayer party game. When the music stops, race your avatar to a free chair. Last player standing wins.",
+  "description": "Musical Chairs — real-time party elimination for 2–8 players. Peer-run: every phase is driven by the shared clock, so the game never waits for a host.",
   "type": "module",
   "scripts": {
     "dev": "vite --host",
     "build": "vite build",
-    "preview": "vite preview",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "test:unit": "vitest run tests/unit",
-    "test:integration": "vitest run tests/integration",
-    "test:e2e": "vitest run tests/e2e",
-    "test:coverage": "vitest run --coverage"
+    "preview": "vite preview"
   },
   "dependencies": {
-    "firebase": "^12.9.0",
+    "firebase": "12.13.0",
     "jose": "^6.2.10",
     "livekit-client": "^2.22.0",
     "livekit-server-sdk": "^2.18.0",
-    "qrcode": "^1.5.4"
+    "qrcode": "1.5.4"
   },
   "devDependencies": {
-    "@vitest/coverage-v8": "4.1.10",
-    "fast-check": "4.9.0",
-    "jsdom": "27.4.0",
-    "vite": "^7.3.1",
-    "vitest": "4.1.10"
+    "vite": "7.3.6"
+  },
+  "engines": {
+    "node": ">=20.19.0"
   },
   "keywords": [
     "musical-chairs",
-    "elimination",
-    "party",
-    "tv",
+    "party-game",
     "multiplayer",
     "firebase",
+    "livekit",
     "pwa"
   ],
+  "author": "",
   "license": "MIT"
 }

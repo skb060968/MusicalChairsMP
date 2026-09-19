@@ -3,18 +3,24 @@ import { AccessToken } from 'livekit-server-sdk';
 
 /**
  * Vercel serverless function: mints a short-lived LiveKit access token for the
- * voice feature. Verifies the caller's Firebase anonymous ID token (jose)
- * against Google's public keys and this app's Firebase project, then issues a
- * LiveKit JWT scoped to a per-game namespaced room (`<game>-<code>`).
+ * Snakes & Ladders voice feature.
  *
- * Required Vercel env (server-side, NOT VITE_): LIVEKIT_API_KEY, LIVEKIT_API_SECRET
- * Optional: FIREBASE_PROJECT_ID (defaults to this app's project).
+ * Security ("jose" verification): the caller must present a valid Firebase
+ * anonymous ID token (Authorization: Bearer <idToken>). We verify its
+ * signature against Google's public keys and check issuer/audience for our
+ * Firebase project, so only real authenticated users of this app can obtain a
+ * LiveKit token. The token is scoped to the requested room only.
+ *
+ * Required Vercel env (server-side, NOT VITE_):
+ *   LIVEKIT_API_KEY, LIVEKIT_API_SECRET
+ * Optional: FIREBASE_PROJECT_ID (defaults to the app's project).
  */
 
-const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || 'skb-games';
+const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || 'snakes-and-ladders3d';
 const ROOM_RE = /^[A-HJ-NP-Z]{4}$/;
-// Supports every game's slot range (up to 12 players → player_0..player_11).
-const IDENTITY_RE = /^player_(?:[0-9]|1[01])$/;
+const IDENTITY_RE = /^player_[0-3]$/;
+// Namespaces the LiveKit room per game so different games sharing one LiveKit
+// project can never land in the same voice room even with an identical code.
 const GAME_RE = /^[a-z][a-z0-9-]{1,15}$/;
 
 const JWKS = createRemoteJWKSet(
@@ -66,6 +72,7 @@ export default async function handler(req, res) {
       res.status(400).json({ error: 'invalid-room-or-identity' });
       return;
     }
+    // Per-game namespaced LiveKit room name.
     const room = `${game}-${code}`;
 
     const token = new AccessToken(apiKey, apiSecret, {

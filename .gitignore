@@ -1,25 +1,10 @@
 node_modules/
 dist/
-build/
-tests/
-
 .env
 .env.local
-.env.*.local
-
-npm-debug.log*
-
 .DS_Store
-Thumbs.db
-
-.vscode/
-.idea/
+*.log
 .kiro/
-
-.vercel/
-
-*.bak
-*.backup
 
 # Firebase rules shared across all projects
 firebase-rules.json

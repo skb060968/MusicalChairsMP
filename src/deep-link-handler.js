@@ -6,40 +6,33 @@
  * - Smart app banner (Open/Install PWA)
  * - Share functionality with deep links
  * - QR code generation for easy room sharing
+ * 
+ * Usage:
+ *   import { initDeepLinkHandler, createShareHandler, showQRCode } from './deep-link-handler.js';
+ *   
+ *   // In your init function:
+ *   const roomCode = initDeepLinkHandler({
+ *     roomInputId: 'phone-join-code',
+ *     joinScreenId: 'phone-join',
+ *     gameName: 'Snakes & Ladders MP'
+ *   });
+ *   
+ *   // For share button:
+ *   shareButton.addEventListener('click', createShareHandler(roomCode, 'Snakes & Ladders MP'));
+ *   
+ *   // For QR code button:
+ *   qrButton.addEventListener('click', () => showQRCode(roomCode, 'Snakes & Ladders MP'));
  */
 
+import { showToast } from './platform-ui.js';
 import QRCode from 'qrcode';
 
-const PRODUCTION_ORIGIN = 'https://musical-chairs-mp.vercel.app';
-
-// Simple showToast function
-function showToast(message, duration = 3000) {
-  const existing = document.getElementById('toast-notification');
-  if (existing) {
-    existing.textContent = message;
-    existing.style.display = 'block';
-    setTimeout(() => existing.style.display = 'none', duration);
-    return;
-  }
-  
-  const toast = document.createElement('div');
-  toast.id = 'toast-notification';
-  toast.textContent = message;
-  toast.style.cssText = `
-    position: fixed;
-    top: 20px;
-    left: 50%;
-    transform: translateX(-50%);
-    background: rgba(0, 0, 0, 0.8);
-    color: white;
-    padding: 12px 24px;
-    border-radius: 8px;
-    z-index: 10000;
-    font-size: 14px;
-  `;
-  document.body.appendChild(toast);
-  setTimeout(() => toast.remove(), duration);
-}
+// Share links + QR codes use the origin the app is served from. That is the
+// production domain whenever players open the app from it — the only case that
+// matters. (It is only wrong when the host is on a Vercel deployment URL or
+// localhost, which is not a production scenario.) No env var to configure.
+const APP_ORIGIN = String(location.origin).replace(/\/+$/, '');
+const buildRoomUrl = (roomCode) => `${APP_ORIGIN}/?room=${roomCode}`;
 
 let deferredInstallPrompt = null;
 
@@ -53,11 +46,12 @@ window.addEventListener('beforeinstallprompt', (e) => {
  * Initialize deep link handling on page load
  * @param {Object} options - Configuration options
  * @param {string} options.roomInputId - ID of the room code input element
- * @param {string} options.joinScreenId - ID of the join screen element
+ * @param {string} options.joinScreenId - ID of the join screen element (optional)
  * @param {string} options.gameName - Name of the game for toast messages
+ * @param {Function} options.showScreenFn - Optional custom function to show screens
  * @returns {string|null} - Room code from URL if present, null otherwise
  */
-export function initDeepLinkHandler({ roomInputId, joinScreenId, gameName = 'Musical Chairs' }) {
+export function initDeepLinkHandler({ roomInputId, joinScreenId, gameName, showScreenFn }) {
   // Check for room code in URL (e.g., ?room=ABCD)
   const urlParams = new URLSearchParams(window.location.search);
   const urlRoomCode = urlParams.get('room');
@@ -73,12 +67,17 @@ export function initDeepLinkHandler({ roomInputId, joinScreenId, gameName = 'Mus
     roomInput.value = urlRoomCode.toUpperCase();
   }
   
-  // Remove `hidden` defensively; the caller activates the join screen under
-  // its own navigation contract.
+  // Show join screen if provided
   if (joinScreenId) {
-    const screen = document.getElementById(joinScreenId);
-    if (screen) {
-      screen.removeAttribute('hidden');
+    if (showScreenFn && typeof showScreenFn === 'function') {
+      // Use custom screen function if provided
+      showScreenFn(joinScreenId);
+    } else {
+      // Fallback to direct manipulation
+      const screen = document.getElementById(joinScreenId);
+      if (screen) {
+        screen.removeAttribute('hidden');
+      }
     }
   }
   
@@ -100,21 +99,22 @@ export function initDeepLinkHandler({ roomInputId, joinScreenId, gameName = 'Mus
  * @param {string} gameName - Name of the game
  * @returns {Function} - Async function to handle sharing
  */
-export function createShareHandler(roomCode, gameName = 'Musical Chairs') {
+export function createShareHandler(roomCode, gameName) {
   return async function handleShare() {
     if (!roomCode) return;
     
-    // Invitations always target the canonical production deployment.
-    const baseUrl = PRODUCTION_ORIGIN;
-
     // Include room code in URL for direct joining
-    const shareUrl = `${baseUrl}/?room=${roomCode}`;
-    const invitation = `Join  ${shareUrl}`;
-
+    const shareUrl = buildRoomUrl(roomCode);
+    const text = `Join my ${gameName} room! Code: ${roomCode}`;
+    
     // Try native share API first (mobile)
     if (navigator.share) {
       try {
-        await navigator.share({ text: invitation });
+        await navigator.share({
+          title: gameName,
+          text,
+          url: shareUrl
+        });
         return;
       } catch (err) {
         // User cancelled or share failed
@@ -126,7 +126,7 @@ export function createShareHandler(roomCode, gameName = 'Musical Chairs') {
     
     // Fallback to clipboard
     try {
-      await navigator.clipboard.writeText(invitation);
+      await navigator.clipboard.writeText(`${text}\n${shareUrl}`);
       showToast('Room link copied!');
     } catch (err) {
       // Clipboard failed, just show the code
@@ -150,8 +150,8 @@ function showAppBanner(gameName) {
   // Detect device type
   const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
   const bannerText = isMobile 
-    ? 'Better Musical Chairs experience in app' 
-    : 'Have the Musical Chairs app installed?';
+    ? 'Better experience in app' 
+    : 'Have the app installed?';
   const buttonText = isMobile 
     ? 'Open/Install App' 
     : 'Using App';
@@ -224,15 +224,11 @@ async function handleOpenApp(gameName, isMobile) {
       return;
     }
     
-    // Mobile: Try to open PWA (may work if already installed)
-    const currentUrl = window.location.href;
-    window.location.href = currentUrl.replace('https://', 'web+app://');
-    
-    // Wait to see if app opened
-    setTimeout(() => {
-      // Still here? App didn't open or not installed
-      showToast('Install app: Browser menu (⋮) → "Install app"', 3500);
-    }, 1000);
+    // Browsers cannot reliably launch an installed PWA through an invented
+    // custom protocol. HTTPS app-scope links are used for room sharing; if
+    // this tab stayed open, direct the user to the platform install UI.
+    dismissAppBanner();
+    showToast('Open the installed app, or use Browser menu (⋮) → "Install app"', 4000);
     
   } catch (err) {
     console.warn('Failed to open app:', err);
@@ -245,14 +241,11 @@ async function handleOpenApp(gameName, isMobile) {
  * @param {string} roomCode - The room code to share
  * @param {string} gameName - Name of the game
  */
-export async function showQRCode(roomCode, gameName = 'Musical Chairs') {
+export async function showQRCode(roomCode, gameName) {
   if (!roomCode) return;
   
-  // QR codes always target the canonical production deployment.
-  const baseUrl = PRODUCTION_ORIGIN;
-
-  // Build share URL with room code
-  const shareUrl = `${baseUrl}/?room=${roomCode}`;
+  // Build share URL with room code (canonical production domain)
+  const shareUrl = buildRoomUrl(roomCode);
   
   // Remove existing QR modal if any
   const existing = document.getElementById('qr-modal');
@@ -307,10 +300,15 @@ export async function showQRCode(roomCode, gameName = 'Musical Chairs') {
   setTimeout(() => modal.classList.add('show'), 50);
   
   // Close handlers
+  const handleEscape = (event) => {
+    if (event.key === 'Escape') closeModal();
+  };
   const closeModal = () => {
+    document.removeEventListener('keydown', handleEscape);
     modal.classList.remove('show');
     setTimeout(() => modal.remove(), 300);
   };
+  document.addEventListener('keydown', handleEscape);
   
   modal.querySelector('.qr-modal-close')?.addEventListener('click', closeModal);
   modal.querySelector('.qr-modal-overlay')?.addEventListener('click', closeModal);
@@ -338,12 +336,6 @@ export async function showQRCode(roomCode, gameName = 'Musical Chairs') {
     }
   });
   
-  // Close on Escape key
-  const handleEscape = (e) => {
-    if (e.key === 'Escape') {
-      closeModal();
-      document.removeEventListener('keydown', handleEscape);
-    }
-  };
-  document.addEventListener('keydown', handleEscape);
+  // Escape listener is installed with the other close handlers so every
+  // close path removes it.
 }

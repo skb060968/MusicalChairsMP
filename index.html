@@ -1,345 +1,192 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <meta name="theme-color" content="#7C3AED">
-    <meta name="description" content="Musical Chairs - a real-time multiplayer drag-to-chair elimination game for 2-8 players.">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- Keep <title>, manifest name and short_name the SAME clean brand string. -->
+    <title>Musical Chairs</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 
-    <!-- LINK PREVIEW: keep og:/twitter: in sync with the description above. Absolute
-         URLs are this game's production domain, hard-coded on purpose (no env var to
-         configure). Preview scrapers cache hard — a shared link may show the old card
-         until re-fetched. -->
-    <meta property="og:type" content="website">
-    <meta property="og:site_name" content="Musical Chairs">
-    <meta property="og:title" content="Musical Chairs">
-    <meta property="og:description" content="Musical Chairs — a real-time multiplayer drag-to-chair elimination game for 2-8 players.">
-    <meta property="og:url" content="https://musical-chairs-mp.vercel.app/">
-    <meta property="og:image" content="https://musical-chairs-mp.vercel.app/icons/icon-512.png">
+    <!-- LINK PREVIEW: edit description + keep og:/twitter: in sync. The absolute URLs
+         are this game's production domain, hard-coded on purpose (no env var to
+         configure). Preview scrapers cache hard � a shared link may show the old card until re-fetched. -->
+    <meta name="description" content="Party elimination — when the music stops, grab a chair · 2–8 players." />
+    <meta name="theme-color" content="#5b21b6" />
 
-    <meta name="twitter:card" content="summary">
-    <meta name="twitter:title" content="Musical Chairs">
-    <meta name="twitter:description" content="Musical Chairs — a real-time multiplayer drag-to-chair elimination game for 2-8 players.">
-    <meta name="twitter:image" content="https://musical-chairs-mp.vercel.app/icons/icon-512.png">
-    <meta name="mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="Musical Chairs">
-    <title>Musical Chairs - Multiplayer</title>
-    <link rel="stylesheet" href="/style.css">
-    <link rel="stylesheet" href="/src/app-banner.css">
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🪑</text></svg>">
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Musical Chairs" />
+    <meta property="og:title" content="Musical Chairs" />
+    <meta property="og:description" content="Party elimination — when the music stops, grab a chair · 2–8 players." />
+    <meta property="og:url" content="https://musical-chairs-mp.vercel.app/" />
+    <meta property="og:image" content="https://musical-chairs-mp.vercel.app/icons/icon-512.png" />
 
-    <!-- PWA: manifest and installable icons -->
-    <link rel="manifest" href="/manifest.json">
-    <link rel="icon" type="image/x-icon" href="/icons/favicon.ico" sizes="32x32">
-    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
-    <link rel="icon" type="image/png" sizes="512x512" href="/icons/icon-512.png">
-    <link rel="apple-touch-icon" href="/icons/icon-192.png">
-</head>
-<body>
-    <!-- Skip link for keyboard users -->
-    <a class="skip-link" href="#mainContent">Skip to main content</a>
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="Musical Chairs" />
+    <meta name="twitter:description" content="Party elimination — when the music stops, grab a chair · 2–8 players." />
+    <meta name="twitter:image" content="https://musical-chairs-mp.vercel.app/icons/icon-512.png" />
 
-    <!-- Global controls (persist across all screens) -->
-    <div id="appControls" class="app-controls">
-        <button type="button" id="muteBtn" class="icon-btn" aria-pressed="false" aria-label="Mute sound">
-            <span id="muteIcon" class="icon-btn-glyph" aria-hidden="true">🔊</span>
-        </button>
-    </div>
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="icon" href="/icons/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
+    <link rel="icon" type="image/png" sizes="512x512" href="/icons/icon-512.png" />
+    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
 
-    <main id="mainContent" class="app-main">
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <div class="app">
 
-        <!-- ============================= Menu Screen ============================= -->
-        <section id="menuScreen" class="screen active" aria-labelledby="menuTitle">
-            <div class="screen-inner menu-container">
-                <header class="game-title">
-                    <h1 id="menuTitle">🪑 MUSICAL CHAIRS 🎵</h1>
-                    <p class="subtitle">When the music stops, drag your avatar to a free chair. Last one standing wins.</p>
-                </header>
-
-                <nav class="menu-buttons" aria-label="Main menu">
-                    <button type="button" id="createRoomBtn" class="menu-btn primary">🎮 Create Room</button>
-                    <button type="button" id="joinRoomBtn" class="menu-btn">🚪 Join Room</button>
-                    <button type="button" id="instructionsBtn" class="menu-btn">📖 How to Play</button>
-                </nav>
-            </div>
-        </section>
-
-        <!-- ========================== Create Room Screen ========================= -->
-        <section id="createRoomScreen" class="screen" aria-labelledby="createRoomTitle">
-            <div class="screen-inner form-container">
-                <h2 id="createRoomTitle">Create Room</h2>
-
-                <form id="createRoomForm" class="form" novalidate>
-                    <div class="input-group">
-                        <label for="hostNameInput">Your name</label>
-                        <input type="text" id="hostNameInput" name="hostName" maxlength="15"
-                               placeholder="Enter your name" autocomplete="nickname"
-                               inputmode="text" required
-                               aria-describedby="hostNameHint hostNameError">
-                        <p id="hostNameHint" class="input-hint">Up to 15 characters. Everyone in the room will see this.</p>
-                        <p id="hostNameError" class="input-error" role="alert" hidden></p>
-                    </div>
-
-                    <fieldset class="avatar-field">
-                        <legend>Choose your avatar</legend>
-                        <div id="createAvatarPicker" class="avatar-picker" role="group" aria-describedby="createAvatarHint">
-                            <button type="button" class="avatar-choice selected" data-avatar="🥷" aria-label="Ninja avatar" aria-pressed="true">🥷</button>
-                            <button type="button" class="avatar-choice" data-avatar="🧙" aria-label="Mage avatar" aria-pressed="false">🧙</button>
-                            <button type="button" class="avatar-choice" data-avatar="🦸" aria-label="Superhero avatar" aria-pressed="false">🦸</button>
-                            <button type="button" class="avatar-choice" data-avatar="👷" aria-label="Builder avatar" aria-pressed="false">👷</button>
-                            <button type="button" class="avatar-choice" data-avatar="🤴" aria-label="Prince avatar" aria-pressed="false">🤴</button>
-                            <button type="button" class="avatar-choice" data-avatar="👸" aria-label="Princess avatar" aria-pressed="false">👸</button>
-                            <button type="button" class="avatar-choice" data-avatar="🧝" aria-label="Elf avatar" aria-pressed="false">🧝</button>
-                            <button type="button" class="avatar-choice" data-avatar="🧛" aria-label="Vampire avatar" aria-pressed="false">🧛</button>
-                        </div>
-                        <p id="createAvatarHint" class="input-hint">This avatar will represent you throughout the game.</p>
-                    </fieldset>
-
-                    <button type="submit" id="createRoomSubmitBtn" class="menu-btn primary">Create Room</button>
-                </form>
-
-                <button type="button" id="createRoomBackBtn" class="back-btn">← Back</button>
-            </div>
-        </section>
-
-        <!-- =========================== Join Room Screen ========================== -->
-        <section id="joinRoomScreen" class="screen" aria-labelledby="joinRoomTitle">
-            <div class="screen-inner form-container">
-                <h2 id="joinRoomTitle">Join Room</h2>
-
-                <form id="joinRoomForm" class="form" novalidate>
-                    <div class="input-group">
-                        <label for="playerNameInput">Your name</label>
-                        <input type="text" id="playerNameInput" name="playerName" maxlength="15"
-                               placeholder="Enter your name" autocomplete="nickname"
-                               inputmode="text" required
-                               aria-describedby="playerNameHint playerNameError">
-                        <p id="playerNameHint" class="input-hint">Up to 15 characters.</p>
-                        <p id="playerNameError" class="input-error" role="alert" hidden></p>
-                    </div>
-
-                    <div class="input-group">
-                        <label for="roomCodeInput">Room code</label>
-                        <input type="text" id="roomCodeInput" name="roomCode" class="room-code-input"
-                               maxlength="4" minlength="4" placeholder="ABCD"
-                               inputmode="text" autocapitalize="characters" autocomplete="off"
-                               autocorrect="off" spellcheck="false" pattern="[A-Za-z]{4}" required
-                               aria-describedby="roomCodeHint roomCodeError">
-                        <p id="roomCodeHint" class="input-hint">4 letters, for example ABCD.</p>
-                        <p id="roomCodeError" class="input-error" role="alert" hidden></p>
-                    </div>
-
-                    <fieldset class="avatar-field">
-                        <legend>Choose your avatar</legend>
-                        <div id="joinAvatarPicker" class="avatar-picker" role="group" aria-describedby="joinAvatarHint">
-                            <button type="button" class="avatar-choice selected" data-avatar="🥷" aria-label="Ninja avatar" aria-pressed="true">🥷</button>
-                            <button type="button" class="avatar-choice" data-avatar="🧙" aria-label="Mage avatar" aria-pressed="false">🧙</button>
-                            <button type="button" class="avatar-choice" data-avatar="🦸" aria-label="Superhero avatar" aria-pressed="false">🦸</button>
-                            <button type="button" class="avatar-choice" data-avatar="👷" aria-label="Builder avatar" aria-pressed="false">👷</button>
-                            <button type="button" class="avatar-choice" data-avatar="🤴" aria-label="Prince avatar" aria-pressed="false">🤴</button>
-                            <button type="button" class="avatar-choice" data-avatar="👸" aria-label="Princess avatar" aria-pressed="false">👸</button>
-                            <button type="button" class="avatar-choice" data-avatar="🧝" aria-label="Elf avatar" aria-pressed="false">🧝</button>
-                            <button type="button" class="avatar-choice" data-avatar="🧛" aria-label="Vampire avatar" aria-pressed="false">🧛</button>
-                        </div>
-                        <p id="joinAvatarHint" class="input-hint" role="status" aria-live="polite">Enter a room code to see which avatars are available.</p>
-                    </fieldset>
-
-                    <button type="submit" id="joinRoomSubmitBtn" class="menu-btn primary">Join Room</button>
-                </form>
-
-                <button type="button" id="joinRoomBackBtn" class="back-btn">← Back</button>
-            </div>
-        </section>
-
-        <!-- ========================== Instructions Screen ========================= -->
-        <section id="instructionsScreen" class="screen" aria-labelledby="instructionsTitle">
-            <div class="screen-inner instructions-container">
-                <h2 id="instructionsTitle">How to Play</h2>
-
-                <ol class="instructions-content">
-                    <li class="instruction-item">
-                        <span class="inst-icon" aria-hidden="true">🎯</span>
-                        <p><strong>Create or join a room</strong> using a 4-letter code, then choose a unique avatar. 2 to 8 players.</p>
-                    </li>
-                    <li class="instruction-item">
-                        <span class="inst-icon" aria-hidden="true">🎵</span>
-                        <p><strong>Listen to the music.</strong> Your avatars orbit the chairs for 10, 20 or 30 seconds — picked at random, with no countdown.</p>
-                    </li>
-                    <li class="instruction-item">
-                        <span class="inst-icon" aria-hidden="true">🫳</span>
-                        <p><strong>Drag when the music stops.</strong> Move your avatar toward any free chair.</p>
-                    </li>
-                    <li class="instruction-item">
-                        <span class="inst-icon" aria-hidden="true">🪑</span>
-                        <p><strong>Enter a chair's capture zone.</strong> The first valid claim wins that chair; release is not required.</p>
-                    </li>
-                    <li class="instruction-item">
-                        <span class="inst-icon" aria-hidden="true">💥</span>
-                        <p><strong>Players without chairs are out.</strong> The last player standing wins, and the host can start a rematch.</p>
-                    </li>
-                </ol>
-
-                <button type="button" id="instructionsBackBtn" class="back-btn">← Back to Menu</button>
-            </div>
-        </section>
-
-        <!-- ============================ Lobby Screen ============================= -->
-        <section id="lobbyScreen" class="screen" aria-labelledby="lobbyTitle">
-            <div class="screen-inner lobby-container">
-                <h2 id="lobbyTitle">Waiting for Players</h2>
-
-                <div class="room-code-display">
-                    <span class="room-code-label" id="lobbyRoomCodeLabel">Room code</span>
-                    <output class="room-code-value" id="lobbyRoomCode" aria-labelledby="lobbyRoomCodeLabel">----</output>
-                </div>
-
-                <div class="lobby-actions" role="group" aria-label="Invite players">
-                    <button type="button" id="shareRoomBtn" class="menu-btn secondary">📋 Share Code</button>
-                    <button type="button" id="qrCodeBtn" class="menu-btn secondary">📱 QR Code</button>
-                </div>
-
-                <section class="players-section" aria-labelledby="lobbyPlayersHeading">
-                    <h3 id="lobbyPlayersHeading">
-                        Players <span id="playerCount" class="player-count">0/8</span>
-                    </h3>
-                    <ul id="playersList" class="players-list" aria-live="polite" aria-relevant="additions removals">
-                        <!-- Player items injected by src/main.js -->
-                    </ul>
-                </section>
-
-                <div class="lobby-footer">
-                    <button type="button" id="startGameBtn" class="menu-btn primary" hidden
-                            aria-describedby="startGameHint" disabled>Start Game</button>
-                    <p id="startGameHint" class="input-hint">Need at least 2 connected players to start.</p>
-                    <button type="button" id="leaveLobbyBtn" class="menu-btn danger">Leave Lobby</button>
-                </div>
-            </div>
-        </section>
-
-        <!-- ============================= Game Screen ============================== -->
-        <section id="gameScreen" class="screen" aria-labelledby="gameTitle">
-            <h2 id="gameTitle" class="sr-only">Musical Chairs game in progress</h2>
-
-            <div class="screen-inner game-container">
-                <header class="game-header">
-                    <p class="round-indicator" id="roundIndicator" role="status" aria-live="polite">Round 1</p>
-                    <div id="voice-widget"></div>
-                    <p class="room-code-inline">
-                        <span class="room-code-label" id="gameRoomCodeLabel">Room</span>
-                        <output class="room-code-inline-value" id="gameRoomCode" aria-labelledby="gameRoomCodeLabel">----</output>
-                    </p>
-                </header>
-
-                <div class="phase-block">
-                    <p class="phase-indicator" id="phaseIndicator" role="status" aria-live="polite">Get ready…</p>
-
-                    <div class="music-indicator" id="musicIndicator" hidden>
-                        <span class="music-note" aria-hidden="true">🎵</span>
-                        <span class="music-note" aria-hidden="true">🎶</span>
-                        <span class="music-note" aria-hidden="true">🎵</span>
-                        <span class="sr-only" id="musicIndicatorText">Music is playing</span>
-                    </div>
-
-                </div>
-
-                <!-- ===================== Musical chairs stage =====================
-                     The stage is the interaction surface and stays a real
-                     <button> for keyboard and screen-reader accessibility.
-
-                     DOM contract (children are injected by src/main.js):
-                       #stageChairs → <div class="chair" data-chair-id="chair_0"></div>
-                       #stageOrbit  → active-player <div class="actor"> nodes
-                     JS owns POSITION (inline left/top percentages on every
-                     .chair / .actor); style.css owns APPEARANCE only.
-                     ================================================================ -->
-                <button type="button" id="stage" class="stage"
-                        aria-label="Musical chairs stage. When the music stops, drag your avatar onto a free chair."
-                        aria-describedby="stageHint">
-                    <div class="stage-floor" aria-hidden="true"></div>
-                    <div class="stage-chairs" id="stageChairs" aria-hidden="true"></div>
-                    <div class="stage-orbit" id="stageOrbit" aria-hidden="true"></div>
-                </button>
-                <p id="stageHint" class="stage-hint" role="status" aria-live="polite"></p>
-
-                <!-- Screen-reader equivalent of the visual ring: a ring of
-                     positioned emoji conveys nothing to assistive tech.
-                     One <li> per player (name + state), injected by main.js. -->
-                <ul id="stagePlayerList" class="sr-only" aria-label="Players and chairs"></ul>
-
-                <p id="spectatorNotice" class="spectator-notice" role="status" hidden>
-                    You are out. Watching the remaining rounds.
-                </p>
-
-                <p id="eliminationBanner" class="elimination-banner" role="status" aria-live="polite" hidden></p>
-
-                <!-- Compact gameplay roster: one fixed row for up to eight
-                     players. Cards contain only avatar + truncated name; CSS
-                     state classes provide active/out/connection cues. -->
-                <section class="players-section" aria-labelledby="gamePlayersHeading">
-                    <h3 id="gamePlayersHeading" class="sr-only">Players</h3>
-                    <ul id="playerGrid" class="player-grid legacy-strip" aria-live="polite">
-                        <!-- Player cards injected by src/main.js -->
-                    </ul>
-                </section>
-            </div>
-        </section>
-
-        <!-- ============================ Victory Screen ============================ -->
-        <section id="victoryScreen" class="screen" aria-labelledby="victoryTitle">
-            <div class="screen-inner victory-container">
-                <h2 id="victoryTitle">🏆 Winner!</h2>
-
-                <div class="winner-card">
-                    <span class="winner-avatar" id="winnerAvatar" aria-hidden="true">🎉</span>
-                    <output class="winner-name" id="winnerName" aria-labelledby="victoryTitle">—</output>
-                </div>
-
-                <section class="rankings-section" aria-labelledby="rankingsHeading">
-                    <h3 id="rankingsHeading">Final Rankings</h3>
-                    <ol id="rankingsList" class="rankings-list" aria-live="polite">
-                        <!-- Ranking items injected by src/main.js -->
-                    </ol>
-                </section>
-
-                <div class="victory-actions">
-                    <button type="button" id="playAgainBtn" class="menu-btn primary" hidden>🔄 Play Again</button>
-                    <button type="button" id="returnToMenuBtn" class="menu-btn">🏠 Return to Menu</button>
-                </div>
-            </div>
-        </section>
-
-    </main>
-
-    <!-- Ordinary transient notifications -->
-    <div id="toastNotification" class="toast-notification" role="status" aria-live="polite" aria-atomic="true" hidden></div>
-
-    <!-- Persistent PWA update prompt; the waiting worker activates only after
-         the player chooses Update app. -->
-    <aside id="updateToast" class="update-toast" role="status" aria-live="polite" aria-atomic="true" hidden>
-        <span class="update-toast-icon" aria-hidden="true">✨</span>
-        <div class="update-toast-copy">
-            <strong>A fresh version is ready!</strong>
-            <span id="updateToastMessage">Update now, or keep playing and choose Later.</span>
+      <!-- ========== HOME ========== -->
+      <section id="home" class="screen home-screen" aria-label="Musical Chairs home">
+        <header class="home-header">
+          <h1 class="home-title">
+            <span class="home-title-line">🪑 🎵 🪑</span>
+            <span class="home-title-line">MUSICAL CHAIRS</span>
+          </h1>
+          <p class="home-subtitle">Party elimination · 2–8 players</p>
+        </header>
+        <div class="home-buttons">
+          <button id="btn-home-host" class="btn primary big" type="button">🏠 Create Room</button>
+          <button id="btn-home-join" class="btn secondary big" type="button">📱 Join Room</button>
+          <button id="btn-home-help" class="btn secondary big" type="button">📖 How to Play</button>
         </div>
-        <div class="update-toast-actions">
-            <button type="button" id="applyUpdateBtn" class="update-toast-btn primary">Update app</button>
-            <button type="button" id="dismissUpdateBtn" class="update-toast-btn secondary">Later</button>
-        </div>
-    </aside>
+      </section>
 
-    <!-- Screen-reader only announcements for phase changes -->
-    <div id="liveAnnouncer" class="sr-only" role="status" aria-live="assertive" aria-atomic="true"></div>
+      <!-- ========== HOW TO PLAY ========== -->
+      <section id="how-to" class="screen" hidden aria-label="How to play">
+        <h2 class="setup-heading">How to Play</h2>
+        <ol class="how-to-list">
+          <li class="how-to-item"><span class="how-to-icon">🎯</span><p><strong>Create or join a room</strong> with a 4-letter code and pick an avatar — 2 to 8 players, each avatar unique.</p></li>
+          <li class="how-to-item"><span class="how-to-icon">🎵</span><p><strong>The music plays</strong> for 10, 20 or 30 seconds — nobody knows which — while your avatars circle the chairs. There is always one chair fewer than players.</p></li>
+          <li class="how-to-item"><span class="how-to-icon">🫳</span><p><strong>When it stops, grab a chair:</strong> drag your avatar onto a free one, or just tap the chair. You have 10 seconds.</p></li>
+          <li class="how-to-item"><span class="how-to-icon">🏆</span><p><strong>Left standing? You're out.</strong> Rounds continue until one player remains. The game runs on a shared clock, so it never waits for anyone — not even the host.</p></li>
+        </ol>
+        <button id="btn-back-help" class="btn secondary back-btn" type="button">← Back</button>
+      </section>
 
-    <!-- Loading overlay -->
-    <div id="loadingOverlay" class="loading-overlay" role="alert" aria-live="assertive" aria-busy="true" hidden>
-        <div class="loading-content">
-            <div class="loading-spinner" aria-hidden="true"></div>
-            <p class="loading-text" id="loadingText">Loading…</p>
+      <!-- ========== CREATE ROOM ========== -->
+      <section id="create-room" class="screen" hidden aria-label="Create a room">
+        <h2 class="setup-heading">Create Room</h2>
+        <div class="setup-group">
+          <input id="create-name-input" type="text" maxlength="12" placeholder="Your Name" autocomplete="off" class="text-input" />
         </div>
+        <div class="setup-group">
+          <label class="setup-label">Choose Avatar</label>
+          <div class="emoji-picker create-emoji-picker" role="group" aria-label="Avatar choices">
+            <button class="emoji-btn selected" type="button" data-emoji="🥷" aria-label="Ninja">🥷</button>
+            <button class="emoji-btn" type="button" data-emoji="🧙" aria-label="Mage">🧙</button>
+            <button class="emoji-btn" type="button" data-emoji="🦸" aria-label="Superhero">🦸</button>
+            <button class="emoji-btn" type="button" data-emoji="👷" aria-label="Builder">👷</button>
+            <button class="emoji-btn" type="button" data-emoji="🤴" aria-label="Prince">🤴</button>
+            <button class="emoji-btn" type="button" data-emoji="👸" aria-label="Princess">👸</button>
+            <button class="emoji-btn" type="button" data-emoji="🧝" aria-label="Elf">🧝</button>
+            <button class="emoji-btn" type="button" data-emoji="🧛" aria-label="Vampire">🧛</button>
+          </div>
+        </div>
+        <button id="btn-create-submit" class="btn primary" type="button">Create</button>
+        <button id="btn-back-create" class="btn secondary back-btn" type="button">← Back</button>
+      </section>
+
+      <!-- ========== JOIN ROOM ========== -->
+      <section id="join-room" class="screen" hidden aria-label="Join a room">
+        <h2 class="setup-heading">Join Room</h2>
+        <div class="setup-group">
+          <input id="room-code-input" type="text" maxlength="4" placeholder="Room Code" autocomplete="off" autocapitalize="characters" spellcheck="false" class="text-input" style="text-transform: uppercase;" />
+        </div>
+        <div class="setup-group">
+          <input id="join-name-input" type="text" maxlength="12" placeholder="Your Name" autocomplete="off" class="text-input" />
+        </div>
+        <div class="setup-group">
+          <label class="setup-label">Choose Avatar <span id="join-avatar-hint" class="setup-hint"></span></label>
+          <div class="emoji-picker join-emoji-picker" role="group" aria-label="Avatar choices">
+            <button class="emoji-btn selected" type="button" data-emoji="🥷" aria-label="Ninja">🥷</button>
+            <button class="emoji-btn" type="button" data-emoji="🧙" aria-label="Mage">🧙</button>
+            <button class="emoji-btn" type="button" data-emoji="🦸" aria-label="Superhero">🦸</button>
+            <button class="emoji-btn" type="button" data-emoji="👷" aria-label="Builder">👷</button>
+            <button class="emoji-btn" type="button" data-emoji="🤴" aria-label="Prince">🤴</button>
+            <button class="emoji-btn" type="button" data-emoji="👸" aria-label="Princess">👸</button>
+            <button class="emoji-btn" type="button" data-emoji="🧝" aria-label="Elf">🧝</button>
+            <button class="emoji-btn" type="button" data-emoji="🧛" aria-label="Vampire">🧛</button>
+          </div>
+        </div>
+        <button id="btn-join-submit" class="btn primary" type="button">Join</button>
+        <button id="btn-back-join" class="btn secondary back-btn" type="button">← Back</button>
+      </section>
+
+      <!-- ========== LOBBY ========== -->
+      <section id="lobby" class="screen" hidden aria-label="Game lobby">
+        <header class="lobby-header">
+          <h2 class="lobby-title">Game Lobby</h2>
+          <p class="room-code-display">Room: <span id="lobby-room-code">----</span></p>
+        </header>
+        <ul id="lobby-player-list" class="player-list" aria-label="Players in lobby"></ul>
+        <div class="lobby-actions">
+          <button id="btn-share-code" class="btn secondary" type="button">📋 Share Code</button>
+          <button id="btn-qr-code" class="btn secondary" type="button">📱 QR Code</button>
+          <button id="btn-start-online" class="btn primary" type="button" hidden>Start Game</button>
+          <button id="btn-leave-lobby" class="btn secondary back-btn" type="button">← Leave</button>
+          <p id="lobby-note" class="lobby-waiting" hidden></p>
+          <p id="lobby-waiting" class="lobby-waiting">Waiting for host to start…</p>
+        </div>
+      </section>
+
+      <!-- ========== GAME ========== -->
+      <section id="gameplay" class="screen mc-game" hidden aria-label="Musical Chairs stage">
+        <div class="mc-column">
+          <header class="mc-header">
+            <span id="mc-round" class="mc-round">Round 1</span>
+            <span class="mc-room-code">Room <span id="mc-room-code">----</span></span>
+          </header>
+
+          <!-- ▼▼▼ THE STAGE (fills the available height, stays square) ▼▼▼ -->
+          <div class="mc-stage-wrap">
+            <div id="mc-stage" class="mc-stage" aria-label="Dance floor. When the music stops, drag your avatar onto a free chair or tap the chair.">
+              <div id="mc-chairs" class="mc-layer mc-chairs" aria-hidden="true"></div>
+              <div id="mc-orbit" class="mc-layer mc-orbit" aria-hidden="true"></div>
+              <div id="mc-floor" class="mc-layer mc-floor" aria-hidden="true"></div>
+              <div id="mc-banner" class="mc-banner" role="status" aria-live="polite" hidden></div>
+            </div>
+          </div>
+          <!-- ▲▲▲ THE STAGE ▲▲▲ -->
+
+          <p id="mc-status" class="mc-message" role="status" aria-live="polite">Get ready…</p>
+
+          <!-- every seat: YOU / HOST / OUT / OFFLINE badges -->
+          <div id="mc-roster" class="mc-roster"></div>
+
+          <div class="mc-controls">
+            <div id="voice-widget"></div>
+            <button id="mute-toggle" class="mute-toggle" type="button" aria-label="Mute game sound" aria-pressed="false">🔊</button>
+            <button id="btn-end-game" class="btn-end-game" type="button" title="Leave game" aria-label="Leave game">✕</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========== RESULTS ========== -->
+      <section id="results" class="screen" hidden aria-label="Game results">
+        <header class="results-header">
+          <h2 class="results-title">🏆 Game Over!</h2>
+        </header>
+        <div id="winner-display" class="winner-display" aria-label="Winner"></div>
+        <ul id="results-list" class="results-bounty-list" aria-label="Final standings"></ul>
+        <div id="ready-indicators" class="ready-indicators" hidden></div>
+        <div class="results-actions">
+          <button id="btn-play-again" class="btn primary" type="button">Play Again</button>
+          <button id="btn-home" class="btn secondary" type="button">Home</button>
+        </div>
+      </section>
+
+    </div><!-- /.app -->
+
+    <!-- Update toast -->
+    <div id="updateToast" class="update-toast" hidden role="status" aria-live="polite">
+      <div class="update-toast-title">🎉 New update available</div>
+      <div id="update-toast-message" class="update-toast-message">Reload to get the latest version.</div>
+      <div class="update-toast-actions">
+        <button id="btn-update-reload" class="btn primary" type="button">Reload Now</button>
+        <button id="btn-update-later" class="btn secondary" type="button">Later</button>
+      </div>
     </div>
 
     <script type="module" src="/src/main.js"></script>
-</body>
+  </body>
 </html>
