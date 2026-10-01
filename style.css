@@ -572,3 +572,27 @@ body {
 }
 .player-list:has(li:nth-child(5)) li { padding: 6px 10px; gap: 6px; font-size: 0.92rem; }
 .player-list:has(li:nth-child(5)) .remove-player-btn { width: 24px; height: 24px; font-size: 14px; }
+
+
+/* ======= STANDARD CONFIRM DIALOG (replaces window.confirm) ======= */
+.modal-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 9999;
+}
+.modal-box {
+  background: rgba(14, 24, 40, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 16px;
+  padding: 22px;
+  max-width: 360px;
+  width: calc(100% - 40px);
+  text-align: center;
+  color: #fff;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+}
+.modal-box h3 { font-family: Georgia, serif; font-size: 1.25rem; margin-bottom: 8px; color: #ffd700; }
+.modal-box p { opacity: 0.9; margin-bottom: 16px; line-height: 1.35; }
+.modal-actions { display: flex; gap: 8px; justify-content: center; }
+.modal-actions .btn { max-width: 140px; }

@@ -17,7 +17,7 @@
 // startup errors are captured too.
 import './diagnostics.js';
 
-import { showScreen, showToast } from './platform-ui.js';
+import { showScreen, showToast, confirmModal } from './platform-ui.js';
 import { initDeepLinkHandler, createShareHandler, showQRCode } from './deep-link-handler.js';
 import {
   createRoom, joinRoom, listenRoom, listenPlayers, setupDisconnectHandler, stopPresenceTracking,
@@ -665,7 +665,11 @@ function wireGameControls() {
   document.getElementById('btn-end-game')?.addEventListener('click', async () => {
     if (!roomCode || playerIndex == null) return;
     const inGame = currentGame?.active?.[localSlot()] === true && currentGame?.status === 'playing';
-    const ok = window.confirm(inGame ? 'Leave the game? You will be out, but the others keep playing.' : 'Leave the game?');
+    const ok = await confirmModal(
+      'Leave the game?',
+      inGame ? 'You will be out, but the others keep playing.' : '',
+      'Leave', 'Stay',
+    );
     if (!ok) return;
     try { await markSelfOffline(roomCode, playerIndex); }
     catch (err) { console.error('markSelfOffline failed:', err); }
