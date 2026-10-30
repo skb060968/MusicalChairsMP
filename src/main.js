@@ -501,7 +501,10 @@ function setPlayMessage(game) {
   const chairs = chairCount(game);
   const players = activeKeys(game).length;
   setRoundLabel(`Round ${game.round} · ${players} players · ${chairs} ${chairs === 1 ? 'chair' : 'chairs'}`);
-  if (game.status === 'finished') { setStatus(`${nameOf(game.winnerKey)} takes the last chair!`); return; }
+  if (game.status === 'finished') {
+    setStatus(game.winnerKey ? `${nameOf(game.winnerKey)} takes the last chair!` : 'Nobody sat — it\'s a draw!');
+    return;
+  }
   if (game.phase === PHASES.MUSIC) {
     setStatus(inGame ? '🎵 Music playing — get ready to grab a chair…' : '🎵 Music playing — you are watching this round.');
   } else if (game.phase === PHASES.CLAIMING) {
@@ -522,7 +525,11 @@ function reactToPhase(game) {
   lastPhaseKey = key;
   if (game.status === 'finished') {
     stopMusic();
-    setBanner(`🏆 ${nameOf(game.winnerKey)} wins!`);
+    if (game.winnerKey) {
+      setBanner(`🏆 ${nameOf(game.winnerKey)} wins!`);
+    } else {
+      setBanner('🤝 Nobody sat — it\'s a draw!');
+    }
     playSound('win');
     return;
   }
@@ -586,7 +593,11 @@ function showResults(game) {
   if (display) {
     display.replaceChildren();
     const line = document.createElement('div');
-    line.textContent = `${wp.emoji || '🏆'} ${wp.name || 'Someone'} wins!${winner === me ? ' 🎉' : ''}`;
+    if (winner) {
+      line.textContent = `${wp.emoji || '🏆'} ${wp.name || 'Someone'} wins!${winner === me ? ' 🎉' : ''}`;
+    } else {
+      line.textContent = '🤝 It\'s a draw — nobody sat down!';
+    }
     display.appendChild(line);
     const others = orderKeys(game).filter((k) => k !== winner && roomPlayers[k]?.connected === false);
     if (others.length && others.length === orderKeys(game).length - 1) {

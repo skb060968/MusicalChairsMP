@@ -177,8 +177,13 @@ export function stopMusic(game, actorKey, ownerUid, timestamp = Date.now()) {
 
 /**
  * claiming → reveal (or finished). Everyone still in who has no chair is out —
- * unless nobody claimed at all (a whole table asleep), in which case the round is
- * simply replayed so a glitch cannot wipe the game.
+ * unless nobody claimed at all AND there is more than one chair available (i.e. more
+ * than two players), in which case the round is simply replayed so a network glitch
+ * cannot wipe multiple players at once.
+ *
+ * Special case: when exactly 2 players remain (1 chair) and neither claims it, both
+ * are eliminated and the game ends with no winner. This prevents an infinite loop
+ * when two online players deliberately (or stubbornly) refuse to sit.
  */
 export function reveal(game, actorKey, ownerUid, timestamp = Date.now()) {
   if (!game || game.status !== 'playing' || game.phase !== PHASES.CLAIMING) return null;
@@ -187,7 +192,10 @@ export function reveal(game, actorKey, ownerUid, timestamp = Date.now()) {
   const anyClaims = claimedChairs(game).length > 0;
   const active = { ...(game.active || {}) };
   const out = { ...(game.out || {}) };
-  if (anyClaims) {
+  // When nobody sat down, only replay the round if there are multiple chairs (>2 players).
+  // With exactly 1 chair (final 2 players), a no-claim round eliminates both — no winner.
+  const shouldEliminate = anyClaims || chairCount(game) === 1;
+  if (shouldEliminate) {
     for (const k of activeKeys(game)) {
       if (!Number.isInteger(claims[k])) { delete active[k]; out[k] = game.round; }
     }
@@ -205,6 +213,9 @@ export function reveal(game, actorKey, ownerUid, timestamp = Date.now()) {
   if (remaining.length === 1) {
     next.status = 'finished';
     next.winnerKey = remaining[0];
+  } else if (remaining.length === 0) {
+    // Both last players failed to sit — game ends with no winner.
+    next.status = 'finished';
   }
   return next;
 }
