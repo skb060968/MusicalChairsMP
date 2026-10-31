@@ -26,7 +26,7 @@ import {
   PLAYER_AVATARS, MAX_PLAYERS,
 } from './firebase-sync.js';
 import {
-  MIN_PLAYERS, PHASES, activeKeys, orderKeys, chairCount, phaseDeadline, dueTransition, standings,
+  MIN_PLAYERS, PHASES, activeKeys, orderKeys, chairCount, phaseDeadline, dueTransition, standings, isDraw,
 } from './engine.js';
 import {
   renderGame, setStatus, setBanner, setRoundLabel, resetStage, isMuted, toggleMute, playSound,
@@ -133,7 +133,7 @@ function connectedRank() {
 }
 
 function scheduleTransition() {
-  if (!roomCode || !currentGame || currentGame.status !== 'playing' || playerIndex == null) { clearTransitionTimer(); return; }
+  if (!roomCode || !currentGame || currentGame.status !== 'playing' || isDraw(currentGame) || playerIndex == null) { clearTransitionTimer(); return; }
   const game = currentGame;
   const key = `${game.roundId}:${game.revision}:${game.phase}`;
   const now = serverNow();
@@ -505,6 +505,10 @@ function setPlayMessage(game) {
     setStatus(game.winnerKey ? `${nameOf(game.winnerKey)} takes the last chair!` : 'Nobody sat — it\'s a draw!');
     return;
   }
+  if (isDraw(game)) {
+    setStatus('🤝 Nobody sat — it\'s a draw!');
+    return;
+  }
   if (game.phase === PHASES.MUSIC) {
     setStatus(inGame ? '🎵 Music playing — get ready to grab a chair…' : '🎵 Music playing — you are watching this round.');
   } else if (game.phase === PHASES.CLAIMING) {
@@ -520,7 +524,7 @@ function setPlayMessage(game) {
 
 /** Sounds, music and banners fire once per phase (snapshots repeat constantly). */
 function reactToPhase(game) {
-  const key = `${game.roundId}:${game.round}:${game.phase}:${game.status}`;
+  const key = `${game.roundId}:${game.round}:${game.phase}:${game.status}:${game.state ?? ''}`;
   if (key === lastPhaseKey) return;
   lastPhaseKey = key;
   if (game.status === 'finished') {
@@ -530,6 +534,12 @@ function reactToPhase(game) {
     } else {
       setBanner('🤝 Nobody sat — it\'s a draw!');
     }
+    playSound('win');
+    return;
+  }
+  if (isDraw(game)) {
+    stopMusic();
+    setBanner('🤝 Nobody sat — it\'s a draw!');
     playSound('win');
     return;
   }
@@ -559,14 +569,14 @@ function handleGameUpdate(game) {
   currentGame = game;
   // Once the results screen is up, later room snapshots (a player leaving via
   // Home, a presence flip) must not drag everyone back to the finished stage.
-  if (game.status === 'finished' && resultsShown) return;
+  if ((game.status === 'finished' || isDraw(game)) && resultsShown) return;
   showGameScreen();
   renderGameView();
   setPlayMessage(game);
   reactToPhase(game);
   scheduleTransition();
 
-  if (game.status === 'finished' && !resultsShown && !resultsTimer) {
+  if ((game.status === 'finished' || isDraw(game)) && !resultsShown && !resultsTimer) {
     resultsTimer = setTimeout(() => { resultsTimer = null; showResults(currentGame); }, RESULT_MS);
   }
 }
@@ -574,7 +584,7 @@ function handleGameUpdate(game) {
 /* ======= RESULTS ======= */
 /** Play Again belongs to the host — or, if the host has gone, to the first connected seat. */
 function mayRestart() {
-  if (!currentGame || currentGame.status !== 'finished') return false;
+  if (!currentGame || (currentGame.status !== 'finished' && !isDraw(currentGame))) return false;
   if (isHost) return true;
   if (roomPlayers.player_0?.connected !== false) return false;
   const connected = Object.keys(roomPlayers).filter((k) => roomPlayers[k]?.name && roomPlayers[k]?.connected !== false).sort();
@@ -616,7 +626,7 @@ function showResults(game) {
       const left = document.createElement('span');
       left.textContent = `${row.winner ? '🏆 ' : ''}${p.emoji || '🧑'} ${p.name || 'Player'}${row.key === me ? ' (you)' : ''}`;
       const right = document.createElement('span');
-      right.textContent = row.winner ? 'last one seated' : `🪑 out in round ${row.survived}`;
+      right.textContent = row.winner ? 'last one seated' : isDraw(game) ? 'nobody sat' : `🪑 out in round ${row.survived}`;
       li.append(left, right);
       if (row.winner) li.classList.add('winner');
       list.appendChild(li);

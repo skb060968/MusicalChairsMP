@@ -177,13 +177,14 @@ export function stopMusic(game, actorKey, ownerUid, timestamp = Date.now()) {
 
 /**
  * claiming → reveal (or finished). Everyone still in who has no chair is out —
- * unless nobody claimed at all AND there is more than one chair available (i.e. more
- * than two players), in which case the round is simply replayed so a network glitch
- * cannot wipe multiple players at once.
+ * unless nobody claimed at all (a whole table asleep), in which case the round is
+ * simply replayed so a glitch cannot wipe the game.
  *
- * Special case: when exactly 2 players remain (1 chair) and neither claims it, both
- * are eliminated and the game ends with no winner. This prevents an infinite loop
- * when two online players deliberately (or stubbornly) refuse to sit.
+ * Special case: when exactly 2 players remain (1 chair) and neither claims it, we
+ * set `state: 'draw'` on the game node. The rules accept this via the free-form
+ * `state` field (`.validate: true`). Everything else stays unchanged so the write
+ * passes the existing rules. `nextRound()` then sees `state === 'draw'` and refuses
+ * to advance, causing the UI to show the draw screen instead of looping.
  */
 export function reveal(game, actorKey, ownerUid, timestamp = Date.now()) {
   if (!game || game.status !== 'playing' || game.phase !== PHASES.CLAIMING) return null;
@@ -192,10 +193,7 @@ export function reveal(game, actorKey, ownerUid, timestamp = Date.now()) {
   const anyClaims = claimedChairs(game).length > 0;
   const active = { ...(game.active || {}) };
   const out = { ...(game.out || {}) };
-  // When nobody sat down, only replay the round if there are multiple chairs (>2 players).
-  // With exactly 1 chair (final 2 players), a no-claim round eliminates both — no winner.
-  const shouldEliminate = anyClaims || chairCount(game) === 1;
-  if (shouldEliminate) {
+  if (anyClaims) {
     for (const k of activeKeys(game)) {
       if (!Number.isInteger(claims[k])) { delete active[k]; out[k] = game.round; }
     }
@@ -213,17 +211,25 @@ export function reveal(game, actorKey, ownerUid, timestamp = Date.now()) {
   if (remaining.length === 1) {
     next.status = 'finished';
     next.winnerKey = remaining[0];
-  } else if (remaining.length === 0) {
-    // Both last players failed to sit — game ends with no winner.
-    next.status = 'finished';
+  } else if (!anyClaims && chairCount(game) === 1) {
+    // Final two players, nobody sat — flag as draw via the free-form `state` field.
+    // status stays 'playing' and active/out are unchanged (rules accept this path).
+    next.state = 'draw';
   }
   return next;
+}
+
+/** Returns true if the game ended as a draw (nobody sat in the final round). */
+export function isDraw(game) {
+  return game?.state === 'draw';
 }
 
 /** reveal → music for round + 1. Any connected player, once the reveal has been shown. */
 export function nextRound(game, actorKey, ownerUid, timestamp = Date.now(), random = Math.random) {
   if (!game || game.status !== 'playing' || game.phase !== PHASES.REVEAL) return null;
   if (activeKeys(game).length < 2) return null;
+  // Don't advance if both last players refused to sit — the draw screen handles it.
+  if (game.state === 'draw') return null;
   const revision = (game.revision || 0) + 1;
   const next = {
     ...game,

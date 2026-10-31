@@ -1,0 +1,10 @@
+content = open('firebase rules.txt', encoding='utf-8').read()
+chairs = content.index('"chairs-rooms"')
+reveal_start = content.index("operation/type').val() === 'reveal'", chairs)
+next_start = content.index("operation/type').val() === 'next'", chairs)
+block = content[reveal_start:next_start]
+opens = block.count('(')
+closes = block.count(')')
+print(f'open={opens} close={closes} diff={opens-closes}')
+print('--- last 500 chars of reveal block ---')
+print(block[-500:])
