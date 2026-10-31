@@ -97,6 +97,8 @@ function resetLoopState() {
   clearTransitionTimer();
   stopMusic();
   resetStage();
+  const playAgain = document.getElementById('btn-play-again');
+  if (playAgain) { playAgain.textContent = 'Play Again'; playAgain.disabled = false; playAgain.hidden = true; }
 }
 function cleanupAndGoHome() {
   if (unsubscribeRoom) { unsubscribeRoom(); unsubscribeRoom = null; }
