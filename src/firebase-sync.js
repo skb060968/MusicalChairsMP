@@ -184,7 +184,7 @@ export function listenRoom(roomCode, callbacks = {}) {
     const room = snap.val();
     callbacks.onPlayersChange?.(room.players || {}, room);
     if (room.game) callbacks.onGameUpdate?.(room.game, room);
-    const status = room.meta?.status === 'ended' || room.game?.status === 'finished'
+    const status = room.meta?.status === 'ended' || room.game?.status === 'finished' || room.game?.state === 'draw'
       ? 'ended'
       : room.game?.status === 'playing' ? 'active' : (room.meta?.status || 'lobby');
     callbacks.onStatusChange?.(status, room);
@@ -340,7 +340,7 @@ export async function resetRoom(roomCode) {
   await requireUser();
   const code = normalizeRoomCode(roomCode);
   const result = await runTransaction(ref(db, roomPath(code)), (room) => {
-    if (!room || room.game?.status !== 'finished') return undefined;
+    if (!room || (room.game?.status !== 'finished' && room.game?.state !== 'draw')) return undefined;
     const next = { ...room, meta: { ...room.meta, status: 'lobby', lastActivity: now() } };
     delete next.game;
     delete next.ready;
