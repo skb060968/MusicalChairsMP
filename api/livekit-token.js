@@ -15,10 +15,9 @@ import { AccessToken } from 'livekit-server-sdk';
  *   LIVEKIT_API_KEY, LIVEKIT_API_SECRET
  * Optional: FIREBASE_PROJECT_ID (defaults to the app's project).
  */
-
-const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || 'snakes-and-ladders3d';
+const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || 'skb-games';
 const ROOM_RE = /^[A-HJ-NP-Z]{4}$/;
-const IDENTITY_RE = /^player_[0-3]$/;
+const IDENTITY_RE = /^player_[0-7]$/;
 // Namespaces the LiveKit room per game so different games sharing one LiveKit
 // project can never land in the same voice room even with an identical code.
 const GAME_RE = /^[a-z][a-z0-9-]{1,15}$/;
