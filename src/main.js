@@ -644,8 +644,7 @@ function refreshPlayAgain() {
   if (playAgain.textContent === 'Restarting…') return;
   playAgain.hidden = false;
   const can = mayRestart();
-  const drawGame = isDraw(currentGame);
-  playAgain.textContent = can ? (drawGame ? 'New Game' : 'Play Again') : (roomPlayers.player_0?.connected === false ? 'Waiting…' : 'Waiting for host…');
+  playAgain.textContent = can ? 'Play Again' : (roomPlayers.player_0?.connected === false ? 'Waiting…' : 'Waiting for host…');
   playAgain.disabled = !can;
 }
 
@@ -655,17 +654,9 @@ function wireResults() {
     const btn = document.getElementById('btn-play-again');
     if (btn) { btn.disabled = true; btn.textContent = 'Restarting…'; }
     try {
-      if (isDraw(currentGame)) {
-        // Draw games have status:'playing' so the normal resetRoom transaction is blocked
-        // by the room-level rules which require game/status==='finished'.
-        // Instead, end + delete the room and go home so the host can create a fresh one.
-        if (isHost && roomCode) { await endRoom(roomCode); await deleteRoom(roomCode); }
-        cleanupAndGoHome();
-      } else {
-        await resetRoom(roomCode);
-        resetLoopState();
-        setupLobby();
-      }
+      await resetRoom(roomCode);
+      resetLoopState();
+      setupLobby();
     } catch (err) { console.error('Restart failed:', err); showToast('Could not restart.'); if (btn) btn.disabled = false; }
   });
   document.getElementById('btn-home')?.addEventListener('click', async () => {

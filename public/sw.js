@@ -1,6 +1,6 @@
 /* Musical Chairs service worker — deliberate updates, safe fallbacks.
  * BUMP CACHE_NAME on every deploy so clients get the update prompt. */
-const CACHE_NAME = 'chairs-mp-v6';
+const CACHE_NAME = 'chairs-mp-v7';
 const STATIC_ASSETS = [
   '/', '/index.html', '/manifest.json',
   '/icons/icon-192.png', '/icons/icon-512.png', '/icons/favicon.ico',
