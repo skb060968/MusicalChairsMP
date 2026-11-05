@@ -3,11 +3,13 @@
  *
  *  1. SOUND  — the reusable iPad-safe Web Audio engine for short cues, plus a looping
  *     HTML <audio> for the music track (too long to decode into a buffer).
- *  2. STAGE  — a square dance floor: N−1 chairs on an inner ring, one avatar per
- *     player still in on an outer ring that spins while the music plays. When the
- *     music stops the ring freezes where it is and the local player drags (or taps)
- *     their way onto a free chair. Positions are cosmetic and local; the only thing
- *     that leaves the device is "I claim chair i".
+ *  2. STAGE  — a round dance floor: N−1 chairs on an inner ring and one CHARACTER
+ *     (shared rig, src/characters.js) per player. While the music plays everyone
+ *     walks round the chairs; when it stops they freeze, the local player drags
+ *     (or taps) their way onto a free chair, and seated players sit down. At the
+ *     reveal the player left standing slumps, and the winner celebrates.
+ *     Positions are cosmetic and local; the only thing that leaves the device is
+ *     "I claim chair i".
  *  3. ROSTER — every seat, with YOU / HOST / OUT / OFFLINE badges and the speaking glow.
  *
  * JS owns POSITION (inline left/top as % of the stage box), CSS owns APPEARANCE.
@@ -19,6 +21,7 @@ import {
   PHASES, roundKeys, roundChairCount, orderKeys, chairOwner, canClaim,
 } from './engine.js';
 import { avatarElement } from './avatars.js';
+import { createCharacter, orbitPoint, JERSEYS } from './characters.js';
 
 /* ============================ SOUND ============================ */
 const MUTE_KEY = 'chairs_muted';
@@ -156,9 +159,19 @@ function place(node, { left, top }) {
   node.style.left = `${left.toFixed(2)}%`;
   node.style.top = `${top.toFixed(2)}%`;
 }
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
 const CHAIR_RADIUS = 24;   // % of the stage
-const ORBIT_RADIUS = 39;
-const HIT_RADIUS = 12;     // % — how close a dragged avatar must be to a chair
+const HIT_RADIUS = 12;     // % — how close a dragged character's feet must be to a chair
+/** The walking circle. Characters are drawn ABOVE their feet, so the circle sits a
+ *  little low and is slightly flattened — heads stay on the floor at the top. */
+const ORBIT = Object.freeze({ cx: 50, cy: 55, rx: 40, ry: 35 });
+/** Feet of a seated player relative to the chair centre: on the front of the seat. */
+const SEAT_DROP = 4;       // % down from the chair centre
+const GATHER_MS = 700;     // stand up and walk back to the circle at the start of a round
+const SIT_GLIDE_MS = 320;  // run to a chair
+const WALK_GAIT_MS = 440;  // stride while circling (a walk; dragging and racing to chairs runs)
+const spinMs = () => (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 40000 : 14000);
 
 /* ============================ STAGE ============================ */
 let selfSlot = null;
@@ -166,20 +179,44 @@ let onClaimHandler = null;
 let currentGame = null;
 let currentPlayers = {};
 let stageSig = '';           // structural signature the stage was built for
-let frozenFor = '';          // `${roundId}:${round}` whose ring has been frozen
-let drag = null;             // { actor, pointerId, origin:{left,top}, target }
+let drag = null;             // { key, pointerId, origin:{x,y}, target }
 let stageWired = false;
+
+/**
+ * slot → { ch, seat, home, optimistic, sitTimer }
+ *   ch          character handle (src/characters.js)
+ *   seat        chair index the character currently sits on (or null)
+ *   home        where it stood when the music stopped (drag cancels return here)
+ *   optimistic  moved to a chair locally, waiting for the claim to land
+ * Kept across rounds of one game so players stand up and walk back to the circle.
+ */
+const actors = new Map();
+const emoted = new Set();    // `${slot}:${roundId}:${round}:${phase}:${status}` already played
+
+const orbit = { raf: 0, gatherTimer: 0, phase: 0, last: 0, running: false };
 
 function chairPositions(n) {
   if (n === 1) return [{ left: 50, top: 50 }];   // the final chair sits dead centre
   return Array.from({ length: n }, (_, i) => ringPosition(i, n, CHAIR_RADIUS));
 }
+function seatPoint(chairIndex) {
+  const p = chairPositions(roundChairCount(currentGame))[chairIndex];
+  return p ? { x: p.left, y: p.top + SEAT_DROP } : null;
+}
+const slotIndex = (key) => Number.parseInt(String(key).replace('player_', ''), 10) || 0;
+
+/** Characters scale with the stage (400 px ≈ 1). */
+function updateScale() {
+  const stage = el('mc-stage');
+  if (!stage) return;
+  const w = stage.getBoundingClientRect().width || 400;
+  stage.style.setProperty('--chr-scale', clamp(w / 400, 0.72, 1.12).toFixed(3));
+}
 
 function buildStage(game, players) {
   const chairsLayer = el('mc-chairs');
-  const orbit = el('mc-orbit');
   const floor = el('mc-floor');
-  if (!chairsLayer || !orbit || !floor) return;
+  if (!chairsLayer || !floor) return;
   const n = roundChairCount(game);
   chairsLayer.replaceChildren(...chairPositions(n).map((pos, i) => {
     const chair = document.createElement('button');
@@ -190,64 +227,119 @@ function buildStage(game, players) {
     place(chair, pos);
     return chair;
   }));
+
+  // Players no longer in the game leave the floor; the rest are reused.
   const keys = roundKeys(game);
-  orbit.replaceChildren(...keys.map((key, i) => buildActor(key, players[key], ringPosition(i, keys.length, ORBIT_RADIUS))));
-  floor.replaceChildren();
-  orbit.style.animation = '';
-  frozenFor = '';
-}
-
-function buildActor(key, player, pos) {
-  const actor = document.createElement('div');
-  actor.className = 'mc-actor';
-  actor.dataset.slot = key;
-  if (key === selfSlot) actor.classList.add('me');
-  const face = document.createElement('span');
-  face.className = 'mc-actor-face';
-  face.appendChild(avatarElement(player?.emoji, 'mc-face-art'));
-  const name = makeSpan('mc-actor-name', player?.name || 'Player');
-  actor.append(face, name);
-  place(actor, pos);
-  return actor;
-}
-
-/** Stop the ring where it is: read each avatar's on-screen centre, then re-home it on
- *  the static floor layer at that spot, so dragging works in plain stage coordinates. */
-function freezeRing() {
-  const stage = el('mc-stage');
-  const orbit = el('mc-orbit');
-  const floor = el('mc-floor');
-  if (!stage || !orbit || !floor) return;
-  const box = stage.getBoundingClientRect();
-  const actors = [...orbit.querySelectorAll('.mc-actor')];
-  const spots = actors.map((a) => {
-    const r = a.getBoundingClientRect();
-    return {
-      left: box.width ? ((r.left + r.width / 2 - box.left) / box.width) * 100 : 50,
-      top: box.height ? ((r.top + r.height / 2 - box.top) / box.height) * 100 : 50,
-    };
+  [...actors.keys()].forEach((key) => {
+    if (!keys.includes(key)) { actors.get(key).ch.destroy(); actors.delete(key); }
   });
-  stage.classList.remove('spinning');
-  actors.forEach((a, i) => { place(a, spots[i]); floor.appendChild(a); });
+  keys.forEach((key, i) => {
+    let entry = actors.get(key);
+    if (!entry) {
+      const [jersey, dark] = JERSEYS[slotIndex(key) % JERSEYS.length];
+      const ch = createCharacter({ avatarId: players[key]?.emoji, jersey, jerseyDark: dark, zBase: 10 });
+      ch.el.classList.add('mc-actor');
+      ch.el.dataset.slot = key;
+      floor.appendChild(ch.el);
+      const start = orbitPoint(i, keys.length, orbit.phase, ORBIT);
+      ch.moveTo(start.x, start.y, { animate: false });
+      ch.setFacing(start.facing);
+      entry = { ch, seat: null, home: { x: start.x, y: start.y }, optimistic: false, sitTimer: 0 };
+      actors.set(key, entry);
+    }
+    entry.ch.setAvatar(players[key]?.emoji).setLabel(players[key]?.name || 'Player');
+  });
+  updateScale();
 }
 
-function actorFor(key) {
-  return el('mc-stage')?.querySelector(`.mc-actor[data-slot="${key}"]`) || null;
+/* ---- the walk round the chairs (music phase) ---- */
+function startOrbit() {
+  if (orbit.running) return;
+  orbit.running = true;
+  const keys = roundKeys(currentGame);
+  // Everyone stands up and walks back to their place on the circle…
+  keys.forEach((key, i) => {
+    const entry = actors.get(key);
+    if (!entry) return;
+    clearTimeout(entry.sitTimer);
+    entry.seat = null;
+    entry.optimistic = false;
+    entry.ch.setPose(null).setFacing('auto').setGait(300);
+    const p = orbitPoint(i, keys.length, orbit.phase, ORBIT);
+    entry.ch.moveTo(p.x, p.y, { glide: GATHER_MS });
+  });
+  // …then they all set off round the chairs together.
+  orbit.gatherTimer = setTimeout(() => {
+    orbit.gatherTimer = 0;
+    if (!orbit.running) return;
+    actors.forEach(({ ch }) => ch.setGait(WALK_GAIT_MS).setRunning(true));
+    orbit.last = performance.now();
+    const frame = (ts) => {
+      if (!orbit.running) return;
+      const dt = Math.min(100, ts - orbit.last);
+      orbit.last = ts;
+      orbit.phase += (dt / spinMs()) * Math.PI * 2;
+      const ks = roundKeys(currentGame);
+      ks.forEach((key, i) => {
+        const entry = actors.get(key);
+        if (!entry) return;
+        const p = orbitPoint(i, ks.length, orbit.phase, ORBIT);
+        entry.ch.setFacing(p.facing).moveTo(p.x, p.y, { animate: false });
+      });
+      orbit.raf = requestAnimationFrame(frame);
+    };
+    orbit.raf = requestAnimationFrame(frame);
+  }, GATHER_MS);
 }
 
-/** Sync chairs + avatars to the claims, badges and phase. Idempotent. */
+/** Music stopped: everyone freezes where they are, turned toward the chairs. */
+function stopOrbit() {
+  if (!orbit.running) return;
+  orbit.running = false;
+  cancelAnimationFrame(orbit.raf);
+  clearTimeout(orbit.gatherTimer);
+  orbit.gatherTimer = 0;
+  actors.forEach((entry) => {
+    entry.ch.setRunning(false).setGait(300).setFacing('front').setFacing('auto');
+    const p = entry.ch.position;
+    if (p) entry.home = p;
+  });
+}
+
+/* ---- seating ---- */
+function sitOn(entry, chairIndex, { optimistic = false } = {}) {
+  const p = seatPoint(chairIndex);
+  if (!p) return;
+  clearTimeout(entry.sitTimer);
+  entry.seat = chairIndex;
+  entry.optimistic = optimistic;
+  entry.ch.setPose(null).moveTo(p.x, p.y, { glide: SIT_GLIDE_MS });
+  // Sit once they arrive, facing the camera.
+  entry.sitTimer = setTimeout(() => entry.ch.setFacing('front').setPose('sit').setFacing('auto'), SIT_GLIDE_MS);
+}
+function standUp(entry, { returnHome = false } = {}) {
+  clearTimeout(entry.sitTimer);
+  entry.seat = null;
+  entry.optimistic = false;
+  entry.ch.setPose(null);
+  if (returnHome && entry.home) entry.ch.moveTo(entry.home.x, entry.home.y, { glide: 300 });
+}
+
+/** Sync chairs + characters to the claims, flags and phase. Idempotent. */
 function syncStage(game, players) {
   const stage = el('mc-stage');
   if (!stage) return;
   const phase = game.phase;
   const claims = game.claims || {};
-  const positions = chairPositions(roundChairCount(game));
+  const chairs = roundChairCount(game);
   const me = selfSlot;
+  const finished = game.status === 'finished';
+  const revealing = phase === PHASES.REVEAL || finished;
   const iCanAct = phase === PHASES.CLAIMING && game.status === 'playing'
     && game.active?.[me] === true && !Number.isInteger(claims[me]);
 
   stage.classList.toggle('claiming', phase === PHASES.CLAIMING);
-  stage.classList.toggle('reveal', phase === PHASES.REVEAL || game.status === 'finished');
+  stage.classList.toggle('reveal', revealing);
   stage.classList.toggle('can-act', iCanAct);
 
   stage.querySelectorAll('.mc-chair').forEach((chair) => {
@@ -257,16 +349,36 @@ function syncStage(game, players) {
     chair.disabled = !iCanAct || Boolean(owner);
   });
 
+  const roundTag = `${game.roundId}:${game.round}:${phase}:${game.status}`;
   roundKeys(game).forEach((key) => {
-    const actor = actorFor(key);
-    if (!actor) return;
+    const entry = actors.get(key);
+    if (!entry) return;
+    const { ch } = entry;
     const seat = claims[key];
-    const seated = Number.isInteger(seat) && positions[seat];
-    actor.classList.toggle('seated', Boolean(seated));
-    actor.classList.toggle('offline', players[key]?.connected === false);
-    actor.classList.toggle('draggable', iCanAct && key === me);
-    actor.classList.toggle('standing', (phase === PHASES.REVEAL || game.status === 'finished') && !seated);
-    if (seated && !(drag && drag.actor === actor)) place(actor, positions[seat]);
+    const seated = Number.isInteger(seat) && seat < chairs;
+    const dragging = drag?.key === key;
+    const eliminated = revealing && game.out?.[key] === game.round;
+
+    ch.setFlags({
+      self: key === me,
+      offline: players[key]?.connected === false,
+      faded: eliminated,
+    });
+    ch.el.classList.toggle('draggable', iCanAct && key === me);
+    ch.el.classList.toggle('seated', seated);
+
+    if (phase !== PHASES.MUSIC && !dragging) {
+        if (seated && entry.seat === seat) entry.optimistic = false;      // our claim was confirmed
+      if (seated && entry.seat !== seat) sitOn(entry, seat);            // a claim landed
+      else if (!seated && entry.seat !== null && !entry.optimistic) standUp(entry);
+    }
+
+    // Reactions, once per player per phase.
+    const tag = `${key}:${roundTag}`;
+    if (revealing && !emoted.has(tag)) {
+      if (eliminated) { emoted.add(tag); ch.emote('sad', '😢'); }
+      else if (finished && key === game.winnerKey) { emoted.add(tag); ch.emote('happy', '🏆'); }
+    }
   });
 }
 
@@ -281,7 +393,7 @@ function nearestFreeChair(pt) {
   let best = null;
   positions.forEach((pos, i) => {
     if (chairOwner(currentGame, i) !== null) return;
-    const d = Math.hypot(pos.left - pt.left, pos.top - pt.top);
+    const d = Math.hypot(pos.left - pt.left, pos.top + SEAT_DROP - pt.top);
     if (d <= HIT_RADIUS && (!best || d < best.d)) best = { i, d };
   });
   return best ? best.i : null;
@@ -298,35 +410,37 @@ function tryClaim(chair) {
 }
 function endDrag(claimed) {
   if (!drag) return;
-  const { actor, origin, target } = drag;
+  const { key, origin, target } = drag;
   drag = null;
-  actor.classList.remove('dragging');
   setTarget(null);
-  if (claimed && target != null) {
-    place(actor, chairPositions(roundChairCount(currentGame))[target]);   // optimistic snap
-  } else {
-    place(actor, origin);
-  }
+  const entry = actors.get(key);
+  if (!entry) return;
+  entry.ch.el.classList.remove('dragging');
+  entry.ch.setGait(300);
+  if (claimed && target != null) sitOn(entry, target, { optimistic: true });
+  else entry.ch.moveTo(origin.x, origin.y, { glide: 280 });
 }
 function wireStage() {
   const stage = el('mc-stage');
   if (!stage || stageWired) return;
   stageWired = true;
   stage.addEventListener('pointerdown', (e) => {
-    const actor = e.target.closest('.mc-actor.draggable');
-    if (!actor || drag) return;
+    const node = e.target.closest('.mc-actor.draggable');
+    if (!node || drag) return;
+    const entry = actors.get(node.dataset.slot);
+    if (!entry) return;
     e.preventDefault();
-    drag = {
-      actor, pointerId: e.pointerId, target: null,
-      origin: { left: parseFloat(actor.style.left) || 50, top: parseFloat(actor.style.top) || 50 },
-    };
-    actor.classList.add('dragging');
+    const at = entry.ch.position || { x: 50, y: 50 };
+    drag = { key: node.dataset.slot, pointerId: e.pointerId, target: null, origin: at };
+    node.classList.add('dragging');
+    entry.ch.setFacing('auto').setGait(260);
     try { stage.setPointerCapture(e.pointerId); } catch (_) {}
   });
   stage.addEventListener('pointermove', (e) => {
     if (!drag || e.pointerId !== drag.pointerId) return;
     const pt = stagePoint(e.clientX, e.clientY);
-    place(drag.actor, { left: Math.min(97, Math.max(3, pt.left)), top: Math.min(97, Math.max(3, pt.top)) });
+    // The finger is at the FEET, so the body stays visible above the finger.
+    actors.get(drag.key)?.ch.moveTo(clamp(pt.left, 4, 96), clamp(pt.top, 14, 97));
     setTarget(nearestFreeChair(pt));
   });
   const finish = (e) => {
@@ -342,10 +456,11 @@ function wireStage() {
     if (!chair || chair.disabled) return;
     const i = Number(chair.dataset.chair);
     if (tryClaim(i)) {
-      const actor = actorFor(selfSlot);
-      if (actor) place(actor, chairPositions(roundChairCount(currentGame))[i]);
+      const entry = actors.get(selfSlot);
+      if (entry) sitOn(entry, i, { optimistic: true });   // runs over and sits
     }
   });
+  window.addEventListener('resize', updateScale);
 }
 
 /* ============================ ROSTER ============================ */
@@ -386,10 +501,21 @@ export function setRoundLabel(text) {
   const node = el('mc-round');
   if (node) node.textContent = String(text ?? '');
 }
+/** The local claim was refused (someone was faster): stand up and walk back. */
+export function cancelClaimPreview() {
+  const entry = actors.get(selfSlot);
+  if (entry?.optimistic) standUp(entry, { returnHome: true });
+}
 /** Forget the stage between games so the next round is built fresh. */
 export function resetStage() {
+  orbit.running = false;
+  cancelAnimationFrame(orbit.raf);
+  clearTimeout(orbit.gatherTimer);
+  orbit.phase = 0;
+  actors.forEach(({ ch, sitTimer }) => { clearTimeout(sitTimer); ch.destroy(); });
+  actors.clear();
+  emoted.clear();
   stageSig = '';
-  frozenFor = '';
   drag = null;
   el('mc-chairs')?.replaceChildren();
   el('mc-orbit')?.replaceChildren();
@@ -414,19 +540,18 @@ export function renderGame({ game, players, localSlot, onClaim }) {
   wireStage();
   renderRoster(game, currentPlayers);
 
-  // Rebuild the stage only when its STRUCTURE changes (new round / players in).
+  // Rebuild chairs only when the STRUCTURE changes (new round / players in).
   const sig = `${game.roundId}:${game.round}:${roundKeys(game).join(',')}`;
-  if (sig !== stageSig) { stageSig = sig; buildStage(game, currentPlayers); }
-
-  const stage = el('mc-stage');
-  const roundKey = `${game.roundId}:${game.round}`;
-  if (game.phase === PHASES.MUSIC && game.status === 'playing') {
-    stage?.classList.add('spinning');
-  } else if (frozenFor !== roundKey) {
-    // First sight of this round's music stop on this device: park the ring here.
-    frozenFor = roundKey;
-    freezeRing();
+  if (sig !== stageSig) {
+    stageSig = sig;
+    orbit.running = false;                 // a new round always restarts the walk
+    cancelAnimationFrame(orbit.raf);
+    clearTimeout(orbit.gatherTimer);
+    buildStage(game, currentPlayers);
   }
+
+  if (game.phase === PHASES.MUSIC && game.status === 'playing') startOrbit();
+  else stopOrbit();
   syncStage(game, currentPlayers);
 }
 
@@ -435,4 +560,5 @@ export function setActiveSpeakers(ids = []) {
   document.querySelectorAll('.mc-player[data-slot]').forEach((card) => {
     card.classList.toggle('speaking', speaking.has(card.dataset.slot));
   });
+  actors.forEach(({ ch }, key) => ch.setFlags({ speaking: speaking.has(key) }));
 }

@@ -31,7 +31,7 @@ import {
 } from './engine.js';
 import {
   renderGame, setStatus, setBanner, setRoundLabel, resetStage, isMuted, toggleMute, playSound,
-  startMusic, stopMusic, setActiveSpeakers, initAudio,
+  startMusic, stopMusic, setActiveSpeakers, initAudio, cancelClaimPreview,
 } from './ui.js';
 import { authReady } from './firebase-config.js';
 import { mountVoiceChat } from './voice-chat-widget.js';
@@ -504,10 +504,12 @@ function doClaim(chair) {
   claimChair(roomCode, playerIndex, chair).then((ok) => {
     if (ok) { playSound('tap'); return; }
     showToast('Too slow — that chair was taken!', 1800);
+    cancelClaimPreview();                               // stand up and walk back
     renderGameView();                                   // snap back to the truth
   }).catch((err) => {
     console.error('Claim failed:', err);
     showToast('Could not claim the chair.');
+    cancelClaimPreview();
     renderGameView();
   });
 }

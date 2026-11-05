@@ -321,19 +321,9 @@ body {
 .mc-chairs { z-index: 1; }
 .mc-orbit { z-index: 2; pointer-events: none; transform-origin: 50% 50%; }
 .mc-floor { z-index: 3; pointer-events: none; }
-.mc-floor .mc-actor, .mc-chairs .mc-chair { pointer-events: auto; }
-
-/* while the music plays the outer ring spins; avatars counter-rotate to stay upright */
-.mc-stage.spinning .mc-orbit { animation: mc-spin var(--spin) linear infinite; }
-.mc-stage.spinning .mc-orbit .mc-actor { animation: mc-upright var(--spin) linear infinite; }
-@keyframes mc-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-@keyframes mc-upright {
-  from { transform: translate(-50%, -50%) rotate(0deg); }
-  to   { transform: translate(-50%, -50%) rotate(-360deg); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .mc-stage { --spin: 40s; }
-}
+.mc-chairs .mc-chair { pointer-events: auto; }
+/* The walk round the chairs is driven from JS (ui.js startOrbit) so each character
+   can face the way it walks; there is no CSS spin any more. */
 
 /* ---- chairs ---- */
 .mc-chair {
@@ -361,41 +351,16 @@ body {
 .mc-chair:disabled { cursor: default; }
 @keyframes mc-pulse { 0%, 100% { opacity: 0.35; transform: scale(1); } 50% { opacity: 1; transform: scale(1.06); } }
 
-/* ---- avatars ---- */
-.mc-actor {
-  position: absolute;
-  width: var(--actor-size); height: var(--actor-size);
-  transform: translate(-50%, -50%);
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  cursor: default;
-  transition: left 0.28s ease, top 0.28s ease, opacity 0.3s ease;
-}
-.mc-actor-face {
-  width: 100%; height: 100%; border-radius: 50%;
-  display: flex; align-items: center; justify-content: center;
-  font-size: calc(var(--actor-size) * 0.56); line-height: 1;
-  background: rgba(20, 8, 50, 0.9);
-  border: 2px solid rgba(255, 255, 255, 0.45);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
-  pointer-events: none;
-}
-.mc-actor-name {
-  position: absolute; top: 100%; left: 50%; transform: translateX(-50%);
-  margin-top: 2px; max-width: 72px;
-  font-size: 0.62rem; font-weight: 800; color: #fff; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none;
-}
-.mc-actor.me .mc-actor-face { border-color: #ffd700; box-shadow: 0 0 0 2px rgba(255, 215, 0, 0.35), 0 4px 12px rgba(0, 0, 0, 0.45); }
-.mc-actor.draggable { cursor: grab; z-index: 5; }
-.mc-actor.draggable .mc-actor-face { animation: mc-nudge 0.9s ease-in-out infinite; }
-.mc-actor.dragging { cursor: grabbing; z-index: 8; transition: none; }
-.mc-actor.dragging .mc-actor-face { animation: none; transform: scale(1.15); }
-.mc-actor.seated { z-index: 4; }
-.mc-actor.seated .mc-actor-face { border-color: #4ade80; box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.35), 0 4px 12px rgba(0, 0, 0, 0.45); }
-.mc-actor.offline .mc-actor-face { opacity: 0.55; filter: grayscale(0.6); }
-.mc-actor.standing { opacity: 0.35; filter: grayscale(0.8); }
-.mc-actor.standing .mc-actor-face { border-color: rgba(255, 77, 77, 0.9); }
-@keyframes mc-nudge { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+/* ---- players: shared character rig (src/characters.js styles itself; these are
+        only the Musical Chairs extras on top) ---- */
+.mc-floor .mc-actor { pointer-events: none; }
+.mc-floor .mc-actor.draggable { pointer-events: auto; cursor: grab; }
+/* "drag me": the head bobs while it is your turn to grab a chair */
+.mc-floor .mc-actor.draggable:not(.dragging) .chr-head { animation: mc-nudge 0.9s ease-in-out infinite; }
+.mc-floor .mc-actor.dragging { cursor: grabbing; --chr-boost: 1.28; }
+/* Seated: soft green glow on the ground under the chair */
+.mc-floor .mc-actor.seated .chr-shadow { background: radial-gradient(ellipse, rgba(74, 222, 128, 0.55), rgba(0, 0, 0, 0.3) 70%); width: 38px; }
+@keyframes mc-nudge { 0%, 100% { translate: 0 0; } 50% { translate: 0 -4px; } }
 
 /* ---- banner over the stage ---- */
 .mc-banner {
@@ -606,8 +571,5 @@ body {
 .ss-av-lobby svg  { width: 30px; height: 33px; }
 .ss-av-winner svg { width: 40px; height: 44px; }
 .mc-avatar svg    { width: 20px; height: 22px; }
-/* On the dance floor the face fills the round token, chin at the bottom edge */
-.mc-actor-face { overflow: hidden; align-items: flex-end; }
-.mc-face-art svg  { width: calc(var(--actor-size) * 0.86); height: calc(var(--actor-size) * 0.95); }
 .winner-line { display: flex; align-items: center; justify-content: center; gap: 6px; flex-wrap: wrap; }
 .results-name { display: inline-flex; align-items: center; gap: 6px; }

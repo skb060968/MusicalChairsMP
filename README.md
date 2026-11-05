@@ -29,7 +29,13 @@ everyone still standing is offline) ─▶ reveal (3.5 s) ─▶ next round … 
 | `src/engine.js` | Pure rules of the game: state shape, reducers (`stopMusic`, `reveal`, `nextRound`), `dueTransition`, standings |
 | `src/firebase-sync.js` | Room lifecycle, presence, `advanceGame` (transaction), `claimChair`, server clock |
 | `src/main.js` | Screens, lobby, the deadline loop (`scheduleTransition` / `fireTransition`), results |
-| `src/ui.js` | Sound + music, the stage (ring, chairs, avatars, drag/tap), roster |
+| `src/ui.js` | Sound + music, the stage (chairs, walking characters, drag/tap, sitting), roster |
+| `src/avatars.js` | **Shared.** The 8 drawn faces (front + back of head) — ids `m1`–`m4`, `f1`–`f4` |
+| `src/characters.js` | **Shared.** Character rig: face on a body that walks/runs, turns, sits, throws, cheers, sulks. Injects its own `chr-` styles |
+
+`avatars.js` and `characters.js` are platform files: copy both into another game's
+`src/` unchanged to get the same players (`createCharacter()` — see the header of
+`characters.js`). The face ids must also be listed in that game's rules block.
 
 Firebase project `skb-games`, room block `chairs-rooms`. Shared `.env` and
 `firebase-rules.json` live one level up; `vite.config.js` points `envDir` there.
