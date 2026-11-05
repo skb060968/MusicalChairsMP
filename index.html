@@ -127,10 +127,15 @@
               <div id="mc-chairs" class="mc-layer mc-chairs" aria-hidden="true"></div>
               <div id="mc-orbit" class="mc-layer mc-orbit" aria-hidden="true"></div>
               <div id="mc-floor" class="mc-layer mc-floor" aria-hidden="true"></div>
-              <div id="mc-banner" class="mc-banner" role="status" aria-live="polite" hidden></div>
             </div>
           </div>
           <!-- ▲▲▲ THE STAGE ▲▲▲ -->
+
+          <!-- Game-status banner: below the dance floor so it never covers a chair.
+               The slot keeps its height when empty, so the stage never jumps. -->
+          <div class="mc-banner-slot">
+            <div id="mc-banner" class="mc-banner" role="status" aria-live="polite" hidden></div>
+          </div>
 
           <p id="mc-status" class="mc-message" role="status" aria-live="polite">Get ready…</p>
 

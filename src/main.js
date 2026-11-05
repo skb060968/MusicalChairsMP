@@ -744,13 +744,14 @@ function setupServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   let waiting = null;
   let approved = false;
+  let fallbackTimer = null;
   const toast = document.getElementById('updateToast');
   const reload = document.getElementById('btn-update-reload');
   const later = document.getElementById('btn-update-later');
   const message = document.getElementById('update-toast-message');
   const show = (w) => { waiting = w; if (toast) toast.hidden = false; };
   reload?.addEventListener('click', () => {
-    if (!waiting || approved) return;
+    if (approved) return;
     approved = true;
     reload.disabled = true;
     reload.textContent = 'Updating…';
@@ -758,8 +759,12 @@ function setupServiceWorker() {
     if (later) later.disabled = true;
     if (message) message.textContent = 'Applying update… the app will reload automatically.';
     if (toast) toast.setAttribute('aria-busy', 'true');
+    // No waiting worker known: show the text briefly, then plain reload.
+    if (!waiting) { setTimeout(() => window.location.reload(), 400); return; }
     try {
       waiting.postMessage({ type: 'SKIP_WAITING' });
+      // Safety net: reload anyway if the new worker never takes control.
+      fallbackTimer = setTimeout(() => window.location.reload(), 5000);
     } catch (_) {
       approved = false;
       reload.disabled = false;
@@ -767,11 +772,14 @@ function setupServiceWorker() {
       reload.removeAttribute('aria-busy');
       if (later) later.disabled = false;
       if (message) message.textContent = 'Update could not start. Please try again.';
+      if (toast) toast.removeAttribute('aria-busy');
     }
   });
   later?.addEventListener('click', () => { if (toast) toast.hidden = true; });
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (approved) window.location.reload();
+    if (!approved) return;
+    clearTimeout(fallbackTimer);
+    window.location.reload();
   });
   window.addEventListener('load', async () => {
     try {

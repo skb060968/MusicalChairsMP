@@ -283,8 +283,11 @@ function startOrbit() {
       ks.forEach((key, i) => {
         const entry = actors.get(key);
         if (!entry) return;
-        const p = orbitPoint(i, ks.length, orbit.phase, ORBIT);
-        entry.ch.setFacing(p.facing).moveTo(p.x, p.y, { animate: false });
+        // prev = the view drawn now, so the view only changes once it is clearly
+        // into the next quarter of the circle (no flicker at the boundaries).
+        const p = orbitPoint(i, ks.length, orbit.phase, { ...ORBIT, prev: entry.ch.facing });
+        if (p.facing !== entry.ch.facing) entry.ch.setFacing(p.facing);
+        entry.ch.moveTo(p.x, p.y, { animate: false });
       });
       orbit.raf = requestAnimationFrame(frame);
     };

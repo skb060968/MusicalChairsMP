@@ -64,17 +64,30 @@ const STYLES = `
 .chr.chr-away .chr-face-back { display: block; }
 .chr.chr-away .chr-torso { background: linear-gradient(180deg, var(--chr-jersey-dark) 0 12%, var(--chr-jersey) 12% 72%, var(--chr-jersey-dark) 100%); }
 
-/* gait: legs and arms swing in opposite phase, body bobs and leans */
-.chr.chr-running .chr-leg-l     { animation: chr-leg var(--chr-gait) ease-in-out infinite alternate; }
-.chr.chr-running .chr-leg-r     { animation: chr-leg var(--chr-gait) ease-in-out calc(var(--chr-gait) * -1) infinite alternate; }
-.chr.chr-running .chr-arm-back  { animation: chr-arm var(--chr-gait) ease-in-out infinite alternate; }
-.chr.chr-running .chr-arm-front { animation: chr-arm var(--chr-gait) ease-in-out calc(var(--chr-gait) * -1) infinite alternate; }
-.chr.chr-running .chr-bob       { animation: chr-bob calc(var(--chr-gait) / 2) ease-in-out infinite alternate; }
-.chr.chr-running .chr-rig       { rotate: 6deg; }
-.chr.chr-running.chr-face-left .chr-rig { rotate: -6deg; }
+/* gait — one cycle = two steps (2 × --chr-gait); left and right are half a cycle apart.
+   SIDE view (walking left/right): legs and arms swing forward/back, body leans in.
+   FRONT / BACK view (walking toward / away from the camera): knees lift in turn and
+   the arms swing toward / away from the camera (foreshortened), no lean. */
+.chr.chr-running .chr-bob { animation: chr-bob calc(var(--chr-gait) / 2) ease-in-out infinite alternate; }
+.chr.chr-running.chr-side .chr-leg-l     { animation: chr-leg var(--chr-gait) ease-in-out infinite alternate; }
+.chr.chr-running.chr-side .chr-leg-r     { animation: chr-leg var(--chr-gait) ease-in-out calc(var(--chr-gait) * -1) infinite alternate; }
+.chr.chr-running.chr-side .chr-arm-back  { animation: chr-arm var(--chr-gait) ease-in-out calc(var(--chr-gait) * -1) infinite alternate; }
+.chr.chr-running.chr-side .chr-arm-front { animation: chr-arm var(--chr-gait) ease-in-out infinite alternate; }
+.chr.chr-running.chr-side .chr-rig       { rotate: 6deg; }
+.chr.chr-running.chr-side.chr-face-left .chr-rig { rotate: -6deg; }
+.chr.chr-side .chr-leg-l { left: 13px; }      /* side on, the legs overlap more */
+.chr.chr-side .chr-leg-r { left: 20px; }
+.chr.chr-running:not(.chr-side) .chr-leg-l     { animation: chr-march calc(var(--chr-gait) * 2) ease-in-out infinite; }
+.chr.chr-running:not(.chr-side) .chr-leg-r     { animation: chr-march calc(var(--chr-gait) * 2) ease-in-out calc(var(--chr-gait) * -1) infinite; }
+.chr.chr-running:not(.chr-side) .chr-arm-back  { animation: chr-arm-fb calc(var(--chr-gait) * 2) ease-in-out calc(var(--chr-gait) * -1) infinite; }
+.chr.chr-running:not(.chr-side) .chr-arm-front { animation: chr-arm-fb calc(var(--chr-gait) * 2) ease-in-out infinite; }
 .chr:not(.chr-running):not(.chr-sit) .chr-bob { animation: chr-idle 1.8s ease-in-out infinite; }
 @keyframes chr-leg { from { transform: rotate(34deg); } to { transform: rotate(-34deg); } }
 @keyframes chr-arm { from { transform: rotate(-40deg); } to { transform: rotate(40deg); } }
+/* knee lift seen from the front: the leg shortens from the hip, the foot rises */
+@keyframes chr-march { 0%, 100% { transform: translateY(0) scaleY(1); } 50% { transform: translateY(-1px) scaleY(0.72); } }
+/* arm swinging toward the camera looks shorter */
+@keyframes chr-arm-fb { 0%, 100% { transform: scaleY(1); } 50% { transform: scaleY(0.7); } }
 @keyframes chr-bob { from { transform: translateY(0); } to { transform: translateY(-3px); } }
 @keyframes chr-idle { 0%, 100% { transform: scaleY(1); } 50% { transform: scaleY(0.97); } }
 
@@ -204,7 +217,14 @@ export function createCharacter(opts = {}) {
 
   let avatarId = null;
   let pos = null;
-  let facing = 'auto';
+  let facing = 'auto';      // requested: 'auto' or a fixed view
+  let view = 'front';       // what is drawn: 'front' | 'away' | 'left' | 'right'
+  const applyView = (v) => {
+    view = v;
+    el.classList.toggle('chr-away', v === 'away');
+    el.classList.toggle('chr-face-left', v === 'left');
+    el.classList.toggle('chr-side', v === 'left' || v === 'right');
+  };
   let runTimer = null;
   let poseTimer = null;
   let emoteTimer = null;
@@ -265,11 +285,7 @@ export function createCharacter(opts = {}) {
       const dy = y - prev.y;
       const d = Math.hypot(dx, dy);
       if (d < 0.02 || (d > 20 && glide === 0)) return api;           // still, or a teleport
-      if (facing === 'auto') {
-        el.classList.toggle('chr-away', dy / d < -0.72);              // heading up the screen
-        if (dx < -0.01) el.classList.add('chr-face-left');
-        else if (dx > 0.01) el.classList.remove('chr-face-left');
-      }
+      if (facing === 'auto') applyView(viewForMotion(dx, dy, view));
       api.setRunning(true, Math.max(260, glide + 80));
       return api;
     },
@@ -277,11 +293,12 @@ export function createCharacter(opts = {}) {
     /** 'auto' (follow movement) | 'front' | 'left' | 'right' | 'away' */
     setFacing(f) {
       facing = f || 'auto';
-      if (facing === 'auto') return api;
-      el.classList.toggle('chr-away', facing === 'away');
-      el.classList.toggle('chr-face-left', facing === 'left');
+      if (facing !== 'auto') applyView(facing);
       return api;
     },
+
+    /** The view currently drawn: 'front' | 'away' | 'left' | 'right'. */
+    get facing() { return view; },
 
     /** Run cycle on/off. `holdMs` turns it off again after that long (0 = until told). */
     setRunning(on, holdMs = 0) {
@@ -356,14 +373,43 @@ export function createCharacter(opts = {}) {
 }
 
 /**
- * Positions on an ellipse for a group walking in a circle (e.g. around chairs).
- * Returns { x, y, facing } for point i of n at `phase` radians (clockwise on screen).
+ * Which way a character should face for a movement of (dx, dy) on screen:
+ *   down the screen → 'front' (walking toward the camera)
+ *   up the screen   → 'away'  (back of the head)
+ *   sideways        → 'left' / 'right' (side-on stride)
+ * The four views each cover a 90° sector. HYSTERESIS: the current view is kept
+ * until the new direction is clearly (≈10°) inside another sector, so a walker
+ * near a sector edge does not flicker between views.
  */
-export function orbitPoint(i, n, phase, { cx = 50, cy = 50, rx = 40, ry = 40 } = {}) {
+const VIEW_DIRS = { front: [0, 1], away: [0, -1], left: [-1, 0], right: [1, 0] };
+const VIEW_STICKINESS = 0.25;   // in dot-product units ≈ 10° past the 45° sector edge
+export function viewForMotion(dx, dy, current = null) {
+  const len = Math.hypot(dx, dy);
+  if (!len) return current || 'front';
+  const ux = dx / len;
+  const uy = dy / len;
+  let best = 'front';
+  let bestScore = -Infinity;
+  Object.entries(VIEW_DIRS).forEach(([v, [vx, vy]]) => {
+    const s = ux * vx + uy * vy;
+    if (s > bestScore) { bestScore = s; best = v; }
+  });
+  if (current && VIEW_DIRS[current]) {
+    const [cx, cy] = VIEW_DIRS[current];
+    if (ux * cx + uy * cy >= bestScore - VIEW_STICKINESS) return current;
+  }
+  return best;
+}
+
+/**
+ * Positions on an ellipse for a group walking in a circle (e.g. around chairs).
+ * Returns { x, y, facing } for point i of n at `phase` radians (clockwise on
+ * screen). Pass the character's current view as `prev` so the hysteresis in
+ * viewForMotion keeps it steady.
+ */
+export function orbitPoint(i, n, phase, { cx = 50, cy = 50, rx = 40, ry = 40, prev = null } = {}) {
   const a = phase + (i * Math.PI * 2) / Math.max(1, n) - Math.PI / 2;
-  const vx = -Math.sin(a);                       // clockwise travel direction
-  const vy = Math.cos(a);
-  let facing = vx < 0 ? 'left' : 'right';
-  if (vy < -0.72) facing = 'away';
-  return { x: cx + rx * Math.cos(a), y: cy + ry * Math.sin(a), facing };
+  const vx = -rx * Math.sin(a);                  // clockwise travel direction on screen
+  const vy = ry * Math.cos(a);
+  return { x: cx + rx * Math.cos(a), y: cy + ry * Math.sin(a), facing: viewForMotion(vx, vy, prev) };
 }
