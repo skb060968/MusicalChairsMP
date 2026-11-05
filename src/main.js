@@ -27,6 +27,7 @@ import {
 } from './firebase-sync.js';
 import {
   MIN_PLAYERS, PHASES, activeKeys, orderKeys, chairCount, phaseDeadline, dueTransition, standings, isDraw,
+  noActivePlayerOnline,
 } from './engine.js';
 import {
   renderGame, setStatus, setBanner, setRoundLabel, resetStage, isMuted, toggleMute, playSound,
@@ -34,6 +35,7 @@ import {
 } from './ui.js';
 import { authReady } from './firebase-config.js';
 import { mountVoiceChat } from './voice-chat-widget.js';
+import { AVATARS, avatarElement } from './avatars.js';
 
 const SESSION_KEY = 'chairs_mp_session';
 const ROOM_NS = 'chairs-rooms';           // = firebase-sync ROOM_PATH = rules block
@@ -137,6 +139,9 @@ function connectedRank() {
 function scheduleTransition() {
   if (!roomCode || !currentGame || currentGame.status !== 'playing' || isDraw(currentGame) || playerIndex == null) { clearTransitionTimer(); return; }
   const game = currentGame;
+  // Paused while every remaining player is offline (see engine dueTransition).
+  // A presence change re-runs this, so the clock resumes when one comes back.
+  if (game.phase !== PHASES.CLAIMING && noActivePlayerOnline(game, roomPlayers)) { clearTransitionTimer(); return; }
   const key = `${game.roundId}:${game.revision}:${game.phase}`;
   const now = serverNow();
   const dueNow = dueTransition(game, roomPlayers, now);
@@ -183,9 +188,25 @@ async function reconcileAfterReconnect() {
 }
 
 /* ======= PICKERS (avatars are UNIQUE in this game) ======= */
+/** Fills a picker with one button per face (first one selected). */
+function buildAvatarPicker(picker) {
+  picker.replaceChildren();
+  AVATARS.forEach((a, i) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = `emoji-btn${i === 0 ? ' selected' : ''}`;
+    btn.dataset.emoji = a.id;
+    btn.setAttribute('aria-label', a.label);
+    btn.title = a.label;
+    btn.appendChild(avatarElement(a.id, 'ss-av-pick'));
+    picker.appendChild(btn);
+  });
+}
+
 function wireEmojiPicker(selector) {
   const picker = document.querySelector(selector);
   if (!picker) return;
+  buildAvatarPicker(picker);
   picker.addEventListener('click', (e) => {
     const btn = e.target.closest('.emoji-btn');
     if (!btn || btn.classList.contains('taken')) return;
@@ -313,8 +334,7 @@ function renderLobbyPlayers(playersArr, playerKeys) {
   playersArr.forEach((player, index) => {
     const li = document.createElement('li');
     if (player.connected === false) li.classList.add('disconnected');
-    const emoji = document.createElement('span');
-    emoji.textContent = player.emoji || '🧑';
+    const emoji = avatarElement(player.emoji, 'ss-av-lobby');
     const name = document.createElement('span');
     name.textContent = player.name || `Player ${index + 1}`;
     name.style.flex = '1';
@@ -397,7 +417,11 @@ function setupLobby() {
       roomPlayers = players;
       isHost = playerIndex === 0;
       refreshLobby(players);
-      if (currentGame) { renderGameView(); scheduleTransition(); }   // presence changes what is due
+      if (currentGame) {                                // presence changes what is due
+        renderGameView();
+        if (!resultsShown) setPlayMessage(currentGame);
+        scheduleTransition();
+      }
       refreshPlayAgain();
     },
     onGameUpdate: (game) => handleGameUpdate(game),
@@ -511,6 +535,10 @@ function setPlayMessage(game) {
     setStatus('🤝 Nobody sat — it\'s a draw!');
     return;
   }
+  if (game.phase !== PHASES.CLAIMING && noActivePlayerOnline(game, roomPlayers)) {
+    setStatus('⏸ Paused — every player still in is offline. Waiting for one to come back…');
+    return;
+  }
   if (game.phase === PHASES.MUSIC) {
     setStatus(inGame ? '🎵 Music playing — get ready to grab a chair…' : '🎵 Music playing — you are watching this round.');
   } else if (game.phase === PHASES.CLAIMING) {
@@ -606,7 +634,11 @@ function showResults(game) {
     display.replaceChildren();
     const line = document.createElement('div');
     if (winner) {
-      line.textContent = `${wp.emoji || '🏆'} ${wp.name || 'Someone'} wins!${winner === me ? ' 🎉' : ''}`;
+      line.className = 'winner-line';
+      line.append(
+        avatarElement(wp.emoji, 'ss-av-winner'),
+        document.createTextNode(` 🏆 ${wp.name || 'Someone'} wins!${winner === me ? ' 🎉' : ''}`),
+      );
     } else {
       line.textContent = '🤝 It\'s a draw — nobody sat down!';
     }
@@ -626,7 +658,12 @@ function showResults(game) {
       const p = roomPlayers[row.key] || {};
       const li = document.createElement('li');
       const left = document.createElement('span');
-      left.textContent = `${row.winner ? '🏆 ' : ''}${p.emoji || '🧑'} ${p.name || 'Player'}${row.key === me ? ' (you)' : ''}`;
+      left.className = 'results-name';
+      left.append(
+        document.createTextNode(row.winner ? '🏆 ' : ''),
+        avatarElement(p.emoji),
+        document.createTextNode(` ${p.name || 'Player'}${row.key === me ? ' (you)' : ''}`),
+      );
       const right = document.createElement('span');
       right.textContent = row.winner ? 'last one seated' : isDraw(game) ? 'nobody sat' : `🪑 out in round ${row.survived}`;
       li.append(left, right);

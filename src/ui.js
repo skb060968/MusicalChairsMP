@@ -13,8 +13,12 @@
  * JS owns POSITION (inline left/top as % of the stage box), CSS owns APPEARANCE.
  */
 import {
-  PHASES, activeKeys, orderKeys, chairCount, chairOwner, canClaim,
+  // The stage draws THIS ROUND's players and chairs (roundKeys / roundChairCount):
+  // they stay unchanged through the reveal, so the eliminated player is still shown
+  // standing and the survivors stay on their chairs until the next round starts.
+  PHASES, roundKeys, roundChairCount, orderKeys, chairOwner, canClaim,
 } from './engine.js';
+import { avatarElement } from './avatars.js';
 
 /* ============================ SOUND ============================ */
 const MUTE_KEY = 'chairs_muted';
@@ -176,7 +180,7 @@ function buildStage(game, players) {
   const orbit = el('mc-orbit');
   const floor = el('mc-floor');
   if (!chairsLayer || !orbit || !floor) return;
-  const n = chairCount(game);
+  const n = roundChairCount(game);
   chairsLayer.replaceChildren(...chairPositions(n).map((pos, i) => {
     const chair = document.createElement('button');
     chair.type = 'button';
@@ -186,7 +190,7 @@ function buildStage(game, players) {
     place(chair, pos);
     return chair;
   }));
-  const keys = activeKeys(game);
+  const keys = roundKeys(game);
   orbit.replaceChildren(...keys.map((key, i) => buildActor(key, players[key], ringPosition(i, keys.length, ORBIT_RADIUS))));
   floor.replaceChildren();
   orbit.style.animation = '';
@@ -198,7 +202,9 @@ function buildActor(key, player, pos) {
   actor.className = 'mc-actor';
   actor.dataset.slot = key;
   if (key === selfSlot) actor.classList.add('me');
-  const face = makeSpan('mc-actor-face', player?.emoji || '🧑');
+  const face = document.createElement('span');
+  face.className = 'mc-actor-face';
+  face.appendChild(avatarElement(player?.emoji, 'mc-face-art'));
   const name = makeSpan('mc-actor-name', player?.name || 'Player');
   actor.append(face, name);
   place(actor, pos);
@@ -235,7 +241,7 @@ function syncStage(game, players) {
   if (!stage) return;
   const phase = game.phase;
   const claims = game.claims || {};
-  const positions = chairPositions(chairCount(game));
+  const positions = chairPositions(roundChairCount(game));
   const me = selfSlot;
   const iCanAct = phase === PHASES.CLAIMING && game.status === 'playing'
     && game.active?.[me] === true && !Number.isInteger(claims[me]);
@@ -251,7 +257,7 @@ function syncStage(game, players) {
     chair.disabled = !iCanAct || Boolean(owner);
   });
 
-  activeKeys(game).forEach((key) => {
+  roundKeys(game).forEach((key) => {
     const actor = actorFor(key);
     if (!actor) return;
     const seat = claims[key];
@@ -271,7 +277,7 @@ function stagePoint(clientX, clientY) {
 }
 function nearestFreeChair(pt) {
   if (!currentGame) return null;
-  const positions = chairPositions(chairCount(currentGame));
+  const positions = chairPositions(roundChairCount(currentGame));
   let best = null;
   positions.forEach((pos, i) => {
     if (chairOwner(currentGame, i) !== null) return;
@@ -297,7 +303,7 @@ function endDrag(claimed) {
   actor.classList.remove('dragging');
   setTarget(null);
   if (claimed && target != null) {
-    place(actor, chairPositions(chairCount(currentGame))[target]);   // optimistic snap
+    place(actor, chairPositions(roundChairCount(currentGame))[target]);   // optimistic snap
   } else {
     place(actor, origin);
   }
@@ -337,7 +343,7 @@ function wireStage() {
     const i = Number(chair.dataset.chair);
     if (tryClaim(i)) {
       const actor = actorFor(selfSlot);
-      if (actor) place(actor, chairPositions(chairCount(currentGame))[i]);
+      if (actor) place(actor, chairPositions(roundChairCount(currentGame))[i]);
     }
   });
 }
@@ -354,7 +360,7 @@ function renderRoster(game, players) {
     card.dataset.slot = slot;
     if (p.connected === false) card.classList.add('disconnected');
     if (game.active?.[slot] !== true) card.classList.add('out');
-    card.appendChild(makeSpan('mc-avatar', p.emoji || '🧑'));
+    card.appendChild(avatarElement(p.emoji, 'mc-avatar'));
     card.appendChild(makeSpan('mc-pname', p.name || 'Player'));
     if (slot === 'player_0') card.appendChild(makeSpan('host-badge', 'HOST'));
     if (slot === selfSlot) card.appendChild(makeSpan('you-badge', 'YOU'));
@@ -409,7 +415,7 @@ export function renderGame({ game, players, localSlot, onClaim }) {
   renderRoster(game, currentPlayers);
 
   // Rebuild the stage only when its STRUCTURE changes (new round / players in).
-  const sig = `${game.roundId}:${game.round}:${activeKeys(game).join(',')}`;
+  const sig = `${game.roundId}:${game.round}:${roundKeys(game).join(',')}`;
   if (sig !== stageSig) { stageSig = sig; buildStage(game, currentPlayers); }
 
   const stage = el('mc-stage');

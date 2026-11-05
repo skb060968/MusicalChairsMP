@@ -78,6 +78,33 @@ export function chairCount(game) {
   return Math.max(0, activeKeys(game).length - 1);
 }
 
+/**
+ * Everyone who played the CURRENT round, in seating order. During music and
+ * claiming that is just the active players; once the round is revealed (or the
+ * game finished) it also includes whoever was eliminated in it, so the stage can
+ * keep showing them standing next to the chairs they missed.
+ */
+export function roundKeys(game) {
+  const active = game?.active || {};
+  const out = game?.out || {};
+  const showOut = game?.phase === PHASES.REVEAL || game?.status === 'finished';
+  return orderKeys(game).filter((k) => active[k] === true || (showOut && out[k] === game.round));
+}
+
+/** Chairs that were in play this round (unchanged by the reveal). */
+export function roundChairCount(game) {
+  return Math.max(0, roundKeys(game).length - 1);
+}
+
+/**
+ * True when nobody still in the game is online. The shared clock is paused
+ * then: without it, spectators (already out) would keep replaying empty rounds.
+ */
+export function noActivePlayerOnline(game, players) {
+  const keys = activeKeys(game);
+  return keys.length > 0 && keys.every((k) => players?.[k]?.connected === false);
+}
+
 export function claimedChairs(game) {
   return Object.values(game?.claims || {}).filter((c) => Number.isInteger(c));
 }
@@ -247,6 +274,10 @@ export function nextRound(game, actorKey, ownerUid, timestamp = Date.now(), rand
 /** The single transition that is due right now, or null. Used by every device's watchdog. */
 export function dueTransition(game, players, serverNow) {
   if (!game || game.status !== 'playing') return null;
+  // Every remaining player is offline: don't start or stop rounds for nobody.
+  // (Resolving a claim window that is already open is still allowed — it can
+  // only eliminate or replay, never loop.)
+  if (game.phase !== PHASES.CLAIMING && noActivePlayerOnline(game, players)) return null;
   if (game.phase === PHASES.MUSIC) return isPhaseDue(game, serverNow) ? 'stop' : null;
   if (game.phase === PHASES.CLAIMING) {
     return isPhaseDue(game, serverNow) || allChairsClaimed(game) || everyoneSettled(game, players) ? 'reveal' : null;

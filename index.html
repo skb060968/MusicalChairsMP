@@ -8,7 +8,7 @@
 
     <!-- LINK PREVIEW: edit description + keep og:/twitter: in sync. The absolute URLs
          are this game's production domain, hard-coded on purpose (no env var to
-         configure). Preview scrapers cache hard � a shared link may show the old card until re-fetched. -->
+         configure). Preview scrapers cache hard; a shared link may show the old card until re-fetched. -->
     <meta name="description" content="Party elimination — when the music stops, grab a chair · 2–8 players." />
     <meta name="theme-color" content="#5b21b6" />
 
@@ -71,16 +71,8 @@
         </div>
         <div class="setup-group">
           <label class="setup-label">Choose Avatar</label>
-          <div class="emoji-picker create-emoji-picker" role="group" aria-label="Avatar choices">
-            <button class="emoji-btn selected" type="button" data-emoji="🥷" aria-label="Ninja">🥷</button>
-            <button class="emoji-btn" type="button" data-emoji="🧙" aria-label="Mage">🧙</button>
-            <button class="emoji-btn" type="button" data-emoji="🦸" aria-label="Superhero">🦸</button>
-            <button class="emoji-btn" type="button" data-emoji="👷" aria-label="Builder">👷</button>
-            <button class="emoji-btn" type="button" data-emoji="🤴" aria-label="Prince">🤴</button>
-            <button class="emoji-btn" type="button" data-emoji="👸" aria-label="Princess">👸</button>
-            <button class="emoji-btn" type="button" data-emoji="🧝" aria-label="Elf">🧝</button>
-            <button class="emoji-btn" type="button" data-emoji="🧛" aria-label="Vampire">🧛</button>
-          </div>
+          <!-- Face buttons are built by main.js from src/avatars.js -->
+          <div class="emoji-picker create-emoji-picker" role="group" aria-label="Avatar choices"></div>
         </div>
         <button id="btn-create-submit" class="btn primary" type="button">Create</button>
         <button id="btn-back-create" class="btn secondary back-btn" type="button">← Back</button>
@@ -97,16 +89,8 @@
         </div>
         <div class="setup-group">
           <label class="setup-label">Choose Avatar <span id="join-avatar-hint" class="setup-hint"></span></label>
-          <div class="emoji-picker join-emoji-picker" role="group" aria-label="Avatar choices">
-            <button class="emoji-btn selected" type="button" data-emoji="🥷" aria-label="Ninja">🥷</button>
-            <button class="emoji-btn" type="button" data-emoji="🧙" aria-label="Mage">🧙</button>
-            <button class="emoji-btn" type="button" data-emoji="🦸" aria-label="Superhero">🦸</button>
-            <button class="emoji-btn" type="button" data-emoji="👷" aria-label="Builder">👷</button>
-            <button class="emoji-btn" type="button" data-emoji="🤴" aria-label="Prince">🤴</button>
-            <button class="emoji-btn" type="button" data-emoji="👸" aria-label="Princess">👸</button>
-            <button class="emoji-btn" type="button" data-emoji="🧝" aria-label="Elf">🧝</button>
-            <button class="emoji-btn" type="button" data-emoji="🧛" aria-label="Vampire">🧛</button>
-          </div>
+          <!-- Face buttons are built by main.js from src/avatars.js -->
+          <div class="emoji-picker join-emoji-picker" role="group" aria-label="Avatar choices"></div>
         </div>
         <button id="btn-join-submit" class="btn primary" type="button">Join</button>
         <button id="btn-back-join" class="btn secondary back-btn" type="button">← Back</button>

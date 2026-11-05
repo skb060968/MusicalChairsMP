@@ -20,12 +20,16 @@ import {
 import {
   MAX_PLAYERS, PLAYER_KEY_RE, createGame, stopMusic, reveal, nextRound,
 } from './engine.js';
+import { AVATAR_IDS } from './avatars.js';
 
 const ROOM_PATH = 'chairs-rooms';              // ← must match the rules block + main.js ROOM_NS
 const ROOM_CODE_CHARSET = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
 const ROOM_CODE_RE = /^[A-HJ-NP-Z]{4}$/;
-/** Avatars are UNIQUE in this game (8 seats, 8 avatars). Must match index.html and the rules. */
-export const PLAYER_AVATARS = Object.freeze(['🥷', '🧙', '🦸', '👷', '🤴', '👸', '🧝', '🧛']);
+/**
+ * Face ids drawn by src/avatars.js (4 male, 4 female). Avatars are UNIQUE in this
+ * game (8 seats, 8 faces). Stored in players/player_N/emoji; must match the rules.
+ */
+export const PLAYER_AVATARS = AVATAR_IDS;
 const TRANSIENT_CODES = new Set([
   'database/disconnected', 'database/network-error', 'database/unavailable',
   'unavailable', 'network-request-failed',
@@ -106,7 +110,9 @@ export async function createRoom(hostName, hostEmoji) {
         hostName: cleanText(hostName, 'Host', 12),
         status: 'lobby',
         createdAt,
-        lastActivity: createdAt,
+        // Server time: the rules reject lastActivity > server now + 60 s, so a
+        // phone whose clock runs fast could not create, start or restart rooms.
+        lastActivity: serverTimestamp(),
       },
       players: {
         player_0: {
@@ -275,7 +281,7 @@ export async function startGame(roomCode, connectedKeys) {
     const game = createGame(connectedKeys, user.uid, now());
     game.phaseAt = serverTimestamp();
     game.operation.timestamp = serverTimestamp();
-    return { ...room, game, meta: { ...room.meta, status: 'active', lastActivity: now() } };
+    return { ...room, game, meta: { ...room.meta, status: 'active', lastActivity: serverTimestamp() } };
   }, { applyLocally: false });
   if (!result.committed) throw new Error('Could not start — the room is not in the lobby.');
   return result.snapshot.val()?.game || null;
@@ -341,7 +347,7 @@ export async function resetRoom(roomCode) {
   const code = normalizeRoomCode(roomCode);
   const result = await runTransaction(ref(db, roomPath(code)), (room) => {
     if (!room || (room.game?.status !== 'finished' && room.game?.state !== 'draw')) return undefined;
-    const next = { ...room, meta: { ...room.meta, status: 'lobby', lastActivity: now() } };
+    const next = { ...room, meta: { ...room.meta, status: 'lobby', lastActivity: serverTimestamp() } };
     delete next.game;
     delete next.ready;
     return next;
@@ -389,7 +395,7 @@ export async function removePlayer(roomCode, playerIndex) {
 export async function endRoom(roomCode) {
   await requireUser();
   const code = normalizeRoomCode(roomCode);
-  await update(ref(db, roomPath(code, 'meta')), { status: 'ended', lastActivity: now() });
+  await update(ref(db, roomPath(code, 'meta')), { status: 'ended', lastActivity: serverTimestamp() });
 }
 
 export async function deleteRoom(roomCode) {
