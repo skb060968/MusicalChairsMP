@@ -56,7 +56,9 @@ body {
 .screen[hidden] { display: none !important; }
 
 /* ======= HOME SCREEN ======= */
-.home-screen { justify-content: center; min-height: 100svh; }
+/* Fill what .app has left (it is already 100svh incl. its padding); a second
+   100svh here made the page 16px taller than the screen and scrollable. */
+.home-screen { justify-content: center; flex: 1 0 auto; }
 .home-header { text-align: center; margin-bottom: 16px; }
 .home-title {
   font-family: Georgia, serif;

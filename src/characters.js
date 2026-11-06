@@ -31,7 +31,7 @@ const STYLES = `
   --chr-jersey: #e53935; --chr-jersey-dark: #a31f1c; --chr-skin: #c98b5d; --chr-shorts: #33261f;
   --chr-gait: 0.3s;
 }
-.chr.chr-glide { transition: left var(--chr-glide, 0.28s) ease-out, top var(--chr-glide, 0.28s) ease-out; }
+.chr.chr-glide { transition: left var(--chr-glide, 0.28s) var(--chr-glide-ease, ease-out), top var(--chr-glide, 0.28s) var(--chr-glide-ease, ease-out); }
 .chr-shadow { position: absolute; left: 50%; bottom: -4px; width: 30px; height: 9px; transform: translateX(-50%);
   border-radius: 50%; background: rgba(0, 0, 0, 0.35); filter: blur(1px); }
 .chr-ring { display: none; }
@@ -102,11 +102,13 @@ const STYLES = `
 .chr.chr-sit .chr-arm-front { transform: rotate(14deg); }
 
 /* throwing (ball games) */
-.chr.chr-aim .chr-arm-front { animation: none !important; transform: rotate(-155deg); }
+.chr.chr-aim .chr-arm-front { animation: none !important; transform: rotate(-155deg); transition: transform 0.12s ease-out; }
 .chr.chr-aim .chr-arm-back  { animation: none !important; transform: rotate(25deg); }
 .chr.chr-throw .chr-arm-front { animation: chr-throw-arm 0.45s ease-out both !important; }
+.chr.chr-throw .chr-arm-back  { animation: chr-throw-arm-back 0.45s ease-out both !important; }
 .chr.chr-throw .chr-body      { animation: chr-lunge 0.45s ease-out both; }
 @keyframes chr-throw-arm { 0% { transform: rotate(-155deg); } 35% { transform: rotate(-200deg); } 70% { transform: rotate(-30deg); } 100% { transform: rotate(0); } }
+@keyframes chr-throw-arm-back { 0% { transform: rotate(25deg); } 50% { transform: rotate(-30deg); } 100% { transform: rotate(0); } }
 @keyframes chr-lunge { 40% { transform: translateY(-4px) scale(1.03, 1.05); } 70% { transform: translateY(1px) scale(1.04, 0.95); } }
 
 /* flags */
@@ -118,7 +120,9 @@ const STYLES = `
   box-shadow: 0 0 10px rgba(255, 235, 59, 0.7), inset 0 0 6px rgba(255, 235, 59, 0.5);
   animation: chr-ring 1.4s ease-in-out infinite; }
 .chr.chr-highlight .chr-ring { border-color: #ffd700; animation-duration: 0.7s; }
+.chr.chr-highlight .chr-body { filter: drop-shadow(0 0 6px rgba(255, 215, 0, 0.95)); }
 .chr.chr-self .chr-label { background: #ffeb3b; color: #3e2723; text-shadow: none; }
+.chr.chr-label-above .chr-label { top: auto; bottom: calc(100% + 4px); }
 .chr.chr-offline { opacity: 0.45; filter: grayscale(0.8); }
 .chr.chr-faded { opacity: 0.4; filter: grayscale(0.85); }
 .chr.chr-speaking .chr-head { filter: drop-shadow(0 0 3px #4ade80) drop-shadow(0 0 6px #4ade80); }
@@ -152,6 +156,8 @@ const STYLES = `
   font-size: 22px; line-height: 1; pointer-events: none; filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.5));
   animation: chr-rise 1.5s ease-out forwards; }
 .chr-float.sad { animation-name: chr-sink; }
+/* float drawn in a separate layer (above every player), anchored at the feet */
+.chr-float-anchor { position: absolute; width: 0; height: 0; z-index: var(--chr-float-z, 210); pointer-events: none; }
 @keyframes chr-rise { 0% { transform: translate(-50%, 10px) scale(0.4); opacity: 0; } 20% { transform: translate(-50%, -14px) scale(1.25); opacity: 1; }
   70% { transform: translate(-50%, -34px) scale(1); opacity: 1; } 100% { transform: translate(-50%, -52px) scale(0.9); opacity: 0; } }
 @keyframes chr-sink { 0% { transform: translate(-50%, -14px) scale(0.5); opacity: 0; } 20% { transform: translate(-50%, -20px) scale(1.15); opacity: 1; }
@@ -186,6 +192,11 @@ export const JERSEYS = Object.freeze([
   ['#e53935', '#a31f1c'], ['#1e88e5', '#0d47a1'], ['#43a047', '#1b5e20'], ['#fb8c00', '#c25e00'],
   ['#8e24aa', '#5c007a'], ['#00acc1', '#007c91'], ['#fdd835', '#c6a700'], ['#d81b60', '#a00037'],
 ]);
+
+const FLAG_CLASSES = Object.freeze({
+  self: 'chr-self', highlight: 'chr-highlight', offline: 'chr-offline',
+  faded: 'chr-faded', speaking: 'chr-speaking', labelAbove: 'chr-label-above',
+});
 
 function darken(hex, amount = 0.3) {
   const n = Number.parseInt(String(hex).replace('#', ''), 16);
@@ -225,6 +236,7 @@ export function createCharacter(opts = {}) {
     el.classList.toggle('chr-face-left', v === 'left');
     el.classList.toggle('chr-side', v === 'left' || v === 'right');
   };
+  let pose = null;
   let runTimer = null;
   let poseTimer = null;
   let emoteTimer = null;
@@ -264,14 +276,16 @@ export function createCharacter(opts = {}) {
      * facing 'auto') turns the body toward the direction of travel.
      * @param {object} [o]
      * @param {number}  [o.glide=0]   ms to slide there (CSS transition) — 0 = jump
+     * @param {string}  [o.ease='ease-out'] glide timing; 'linear' suits a stream of network updates
      * @param {boolean} [o.animate=true] play the run cycle / auto-facing for this move
      */
-    moveTo(x, y, { glide = 0, animate = true } = {}) {
+    moveTo(x, y, { glide = 0, ease = 'ease-out', animate = true } = {}) {
       const prev = pos;
       pos = { x, y };
       clearTimeout(glideTimer);
       if (glide > 0) {
         el.style.setProperty('--chr-glide', `${glide}ms`);
+        el.style.setProperty('--chr-glide-ease', ease);
         el.classList.add('chr-glide');
         glideTimer = setTimeout(() => el.classList.remove('chr-glide'), glide + 40);
       } else {
@@ -315,23 +329,31 @@ export function createCharacter(opts = {}) {
     },
 
     /** null | 'sit' | 'aim' | 'throw' (throw plays once, ~0.45 s). */
-    setPose(pose) {
+    setPose(p) {
       clearTimeout(poseTimer);
       el.classList.remove('chr-sit', 'chr-aim', 'chr-throw');
+      pose = ['sit', 'aim', 'throw'].includes(p) ? p : null;
       if (pose === 'sit') el.classList.add('chr-sit');
       else if (pose === 'aim') el.classList.add('chr-aim');
       else if (pose === 'throw') {
         void el.offsetWidth;
         el.classList.add('chr-throw');
-        poseTimer = setTimeout(() => el.classList.remove('chr-throw'), 500);
+        poseTimer = setTimeout(() => { el.classList.remove('chr-throw'); pose = null; }, 500);
       }
       return api;
     },
 
-    /** Boolean flags: self (YOU ring + bigger), highlight (gold ring), offline, faded, speaking. */
+    /** The current pose: null | 'sit' | 'aim' | 'throw'. */
+    get pose() { return pose; },
+
+    /**
+     * Boolean flags: self (YOU ring + bigger), highlight (gold ring + glow), offline,
+     * faded, speaking, labelAbove (name tag above the head, e.g. at the bottom edge).
+     */
     setFlags(flags = {}) {
       Object.entries(flags).forEach(([k, v]) => {
-        if (['self', 'highlight', 'offline', 'faded', 'speaking'].includes(k)) el.classList.toggle(`chr-${k}`, Boolean(v));
+        const cls = FLAG_CLASSES[k];
+        if (cls) el.classList.toggle(cls, Boolean(v));
       });
       return api;
     },
@@ -340,8 +362,13 @@ export function createCharacter(opts = {}) {
     setHandItem(node) { hand.replaceChildren(...(node ? [node] : [])); return api; },
     setHeadItem(node) { hat.replaceChildren(...(node ? [node] : [])); return api; },
 
-    /** 'happy' (double jump, arms up, gold glow) or 'sad' (shake, slump, red glow); optional floating emoji. */
-    emote(kind, icon) {
+    /**
+     * 'happy' (double jump, arms up, gold glow) or 'sad' (shake, slump, red glow); optional floating emoji.
+     * @param {object} [o]
+     * @param {Element} [o.layer] draw the emoji in this element (same coordinate box as the
+     *   character's container) so it sits above every player; default: inside the character
+     */
+    emote(kind, icon, { layer = null } = {}) {
       const cls = kind === 'sad' ? 'chr-sad' : 'chr-happy';
       el.classList.remove('chr-sad', 'chr-happy');
       void el.offsetWidth;                       // restart if already playing
@@ -352,9 +379,20 @@ export function createCharacter(opts = {}) {
         const f = document.createElement('span');
         f.className = `chr-float${kind === 'sad' ? ' sad' : ''}`;
         f.textContent = icon;
-        el.appendChild(f);
-        f.addEventListener('animationend', () => f.remove(), { once: true });
-        setTimeout(() => f.remove(), 2000);
+        let node = f;
+        if (layer && pos) {
+          node = document.createElement('span');
+          node.className = 'chr-float-anchor';
+          node.style.left = `${pos.x}%`;
+          node.style.top = `${pos.y}%`;
+          f.style.bottom = `${Math.round(el.getBoundingClientRect().height) || 62}px`;   // start at head height
+          node.appendChild(f);
+          layer.appendChild(node);
+        } else {
+          el.appendChild(f);
+        }
+        f.addEventListener('animationend', () => node.remove(), { once: true });
+        setTimeout(() => node.remove(), 2000);
       }
       return api;
     },
