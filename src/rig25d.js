@@ -47,8 +47,11 @@ const DIM = Object.freeze({
   thighW: 5.6, shinW: 4.4, shoeW: 3.2, upperW: 3.7, foreW: 3.2,
 });
 const H_STAND = DIM.thigh + DIM.shin + DIM.ankleH + DIM.hipDrop;
-/** Radius of a ball held in the hand (rig units ≈ px at scale 1): a 10 px ball. */
-export const BALL_RADIUS = 5;
+/**
+ * Radius of a ball held in the hand (rig units ≈ px at scale 1): a 15 px ball, the
+ * same size games draw it on the field, so it does not change size when thrown.
+ */
+export const BALL_RADIUS = 7.5;
 export const RIG_HEIGHT = Math.round(H_STAND + DIM.torso + DIM.neckHead + DIM.headRy + 1.5);
 
 /* ======================= SMALL MATH ======================= */
@@ -1190,8 +1193,9 @@ class Rig25d {
       this.hand.x = h[0];
       this.hand.y = h[1];
       if (this.handItem === 'ball') {
-        // Same size as the ball on the field (BALL_RADIUS: hand-sized, a tennis ball).
-        const b = proj(addS(arm.A.H, arm.A.fd, 1.3));
+        // Same size as the ball on the field (BALL_RADIUS). Its centre sits just past the
+        // hand, so the fingers hold the near side of the ball.
+        const b = proj(addS(arm.A.H, arm.A.fd, BALL_RADIUS * 0.6));
         ctx.fillStyle = col.outline;
         dot(ctx, b, BALL_RADIUS * k + ow / 3);
         ctx.fillStyle = '#d32f2f';
