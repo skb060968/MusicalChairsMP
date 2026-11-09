@@ -6,7 +6,7 @@
  *  2. STAGE  — a round dance floor: N−1 chairs on an inner ring and one CHARACTER
  *     (shared rig, src/characters.js) per player. While the music plays everyone
  *     walks round the chairs; when it stops they freeze, the local player drags
- *     (or taps) their way onto a free chair, and seated players sit down. At the
+ *     their avatar onto a free chair (drag only), and seated players sit down. At the
  *     reveal the player left standing slumps, and the winner celebrates.
  *     Positions are cosmetic and local; the only thing that leaves the device is
  *     "I claim chair i".
@@ -224,6 +224,7 @@ function buildStage(game, players) {
   chairsLayer.replaceChildren(...chairPositions(n).map((pos, i) => {
     const chair = document.createElement('button');
     chair.type = 'button';
+    chair.tabIndex = -1;                 // not tappable / focusable: chairs are claimed by dragging
     chair.className = 'mc-chair';
     chair.dataset.chair = String(i);
     chair.setAttribute('aria-label', `Chair ${i + 1}`);
@@ -394,7 +395,7 @@ function syncStage(game, players) {
   });
 }
 
-/* ---- drag / tap to claim ---- */
+/* ---- drag to claim ---- */
 function stagePoint(clientX, clientY) {
   const box = el('mc-stage').getBoundingClientRect();
   return { left: ((clientX - box.left) / box.width) * 100, top: ((clientY - box.top) / box.height) * 100 };
@@ -462,16 +463,8 @@ function wireStage() {
   };
   stage.addEventListener('pointerup', finish);
   stage.addEventListener('pointercancel', finish);
-  // Tap a free chair: the accessible route, and quicker on a small screen.
-  stage.addEventListener('click', (e) => {
-    const chair = e.target.closest('.mc-chair');
-    if (!chair || chair.disabled) return;
-    const i = Number(chair.dataset.chair);
-    if (tryClaim(i)) {
-      const entry = actors.get(selfSlot);
-      if (entry) sitOn(entry, i, { optimistic: true });   // runs over and sits
-    }
-  });
+  // Chairs are claimed only by dragging your avatar onto one (tapping a chair does
+  // nothing). The first claim to reach the server wins; the rules refuse the rest.
   window.addEventListener('resize', updateScale);
 }
 

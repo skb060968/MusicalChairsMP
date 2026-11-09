@@ -1,7 +1,7 @@
 # Musical Chairs
 
 Real-time party elimination for 2–8 players. When the music stops, drag your avatar
-onto a free chair (or tap the chair). Left standing? You're out. Last one seated wins.
+onto a free chair (dragging is the only way; the first to drop on a chair gets it). Left standing? You're out. Last one seated wins.
 
 **Peer-run.** There is no host authority once the game starts. Every phase change is a
 function of the shared `game` node and the server clock, so any connected player may

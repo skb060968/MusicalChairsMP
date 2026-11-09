@@ -497,7 +497,7 @@ function showGameScreen() {
   }
 }
 
-/** The local player grabbed a chair (drag or tap). Optimistic in the UI; the rules
+/** The local player dragged their avatar onto a chair. Optimistic in the UI; the rules
  *  are the referee — a refusal means someone else got there first. */
 function doClaim(chair) {
   if (!roomCode || playerIndex == null) return;
@@ -546,7 +546,7 @@ function setPlayMessage(game) {
   } else if (game.phase === PHASES.CLAIMING) {
     if (!inGame) setStatus('Music stopped — watching them scramble…');
     else if (seated) setStatus('🪑 You are seated! Waiting for the others…');
-    else setStatus('🛑 Music stopped — drag your avatar to a free chair, or tap one!');
+    else setStatus('🛑 Music stopped — drag your avatar onto a free chair!');
   } else if (game.phase === PHASES.REVEAL) {
     const out = orderKeys(game).filter((k) => game.out?.[k] === game.round);
     if (!out.length) setStatus('Everyone found a chair — again!');

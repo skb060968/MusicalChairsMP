@@ -341,7 +341,8 @@ body {
   background: url('/images/chair.png') center / contain no-repeat;
   filter: drop-shadow(0 3px 4px rgba(0, 0, 0, 0.5));
 }
-.mc-chair.free { cursor: pointer; }
+/* Free chairs pulse as drop targets; they are not tappable (claim by dragging). */
+.mc-chair.free { cursor: default; }
 .mc-chair.free::after {
   content: ''; position: absolute; inset: -14%; border-radius: 50%;
   border: 2px solid rgba(255, 215, 0, 0.55);

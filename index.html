@@ -57,7 +57,7 @@
         <ol class="how-to-list">
           <li class="how-to-item"><span class="how-to-icon">🎯</span><p><strong>Create or join a room</strong> with a 4-letter code and pick an avatar — 2 to 8 players, each avatar unique.</p></li>
           <li class="how-to-item"><span class="how-to-icon">🎵</span><p><strong>The music plays</strong> for 10, 20 or 30 seconds — nobody knows which — while your avatars circle the chairs. There is always one chair fewer than players.</p></li>
-          <li class="how-to-item"><span class="how-to-icon">🫳</span><p><strong>When it stops, grab a chair:</strong> drag your avatar onto a free one, or just tap the chair. You have 10 seconds.</p></li>
+          <li class="how-to-item"><span class="how-to-icon">🫳</span><p><strong>When it stops, grab a chair:</strong> drag your avatar onto a free one. The first player to drop onto a chair gets it. You have 10 seconds.</p></li>
           <li class="how-to-item"><span class="how-to-icon">🏆</span><p><strong>Left standing? You're out.</strong> Rounds continue until one player remains. The game runs on a shared clock, so it never waits for anyone — not even the host.</p></li>
         </ol>
         <button id="btn-back-help" class="btn secondary back-btn" type="button">← Back</button>
@@ -123,7 +123,7 @@
 
           <!-- ▼▼▼ THE STAGE (fills the available height, stays square) ▼▼▼ -->
           <div class="mc-stage-wrap">
-            <div id="mc-stage" class="mc-stage" aria-label="Dance floor. When the music stops, drag your avatar onto a free chair or tap the chair.">
+            <div id="mc-stage" class="mc-stage" aria-label="Dance floor. When the music stops, drag your avatar onto a free chair.">
               <div id="mc-chairs" class="mc-layer mc-chairs" aria-hidden="true"></div>
               <div id="mc-orbit" class="mc-layer mc-orbit" aria-hidden="true"></div>
               <div id="mc-floor" class="mc-layer mc-floor" aria-hidden="true"></div>
