@@ -163,6 +163,9 @@ const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
 const CHAIR_RADIUS = 24;   // % of the stage
 const HIT_RADIUS = 12;     // % — how close a dragged character's feet must be to a chair
+/** Dragging: the avatar runs toward the finger at this speed (% of the stage per second),
+ *  so a near chair is reached in ~0.4 s and one across the floor in ~1.6 s. */
+const DRAG_RUN_PCT_PER_S = 40;
 /** The walking circle. Characters are drawn ABOVE their feet, so the circle sits a
  *  little low and is slightly flattened — heads stay on the floor at the top. */
 const ORBIT = Object.freeze({ cx: 50, cy: 55, rx: 40, ry: 35 });
@@ -421,9 +424,35 @@ function tryClaim(chair) {
   onClaimHandler?.(chair);
   return true;
 }
+/**
+ * While dragging, the avatar RUNS toward the finger at a capped speed instead of
+ * jumping to it, so a chair far from where you stood when the music stopped takes
+ * longer to reach than a near one. The drop target is the chair under the avatar's
+ * feet, not under the finger.
+ */
+function dragStep(ts) {
+  if (!drag) return;
+  const dt = Math.min(0.05, Math.max(0, (ts - drag.lastTs) / 1000));
+  drag.lastTs = ts;
+  const entry = actors.get(drag.key);
+  if (entry) {
+    const dx = drag.finger.x - drag.pos.x;
+    const dy = drag.finger.y - drag.pos.y;
+    const d = Math.hypot(dx, dy);
+    const step = DRAG_RUN_PCT_PER_S * dt;
+    if (d > 0.05) {
+      const k = Math.min(1, step / d);
+      drag.pos = { x: drag.pos.x + dx * k, y: drag.pos.y + dy * k };
+      entry.ch.moveTo(drag.pos.x, drag.pos.y);
+    }
+    setTarget(nearestFreeChair({ left: drag.pos.x, top: drag.pos.y }));
+  }
+  drag.raf = requestAnimationFrame(dragStep);
+}
 function endDrag(claimed) {
   if (!drag) return;
   const { key, origin, target } = drag;
+  cancelAnimationFrame(drag.raf);
   drag = null;
   setTarget(null);
   const entry = actors.get(key);
@@ -444,21 +473,26 @@ function wireStage() {
     if (!entry) return;
     e.preventDefault();
     const at = entry.ch.position || { x: 50, y: 50 };
-    drag = { key: node.dataset.slot, pointerId: e.pointerId, target: null, origin: at };
+    drag = {
+      key: node.dataset.slot, pointerId: e.pointerId, target: null, origin: at,
+      pos: { ...at }, finger: { ...at }, lastTs: performance.now(), raf: 0,
+    };
     node.classList.add('dragging');
     entry.ch.setFacing('auto').setGait(260);
     try { stage.setPointerCapture(e.pointerId); } catch (_) {}
+    drag.raf = requestAnimationFrame(dragStep);
   });
   stage.addEventListener('pointermove', (e) => {
     if (!drag || e.pointerId !== drag.pointerId) return;
     const pt = stagePoint(e.clientX, e.clientY);
-    // The finger is at the FEET, so the body stays visible above the finger.
-    actors.get(drag.key)?.ch.moveTo(clamp(pt.left, 4, 96), clamp(pt.top, 14, 97));
-    setTarget(nearestFreeChair(pt));
+    // The finger marks where the FEET should go; the avatar runs there (dragStep).
+    drag.finger = { x: clamp(pt.left, 4, 96), y: clamp(pt.top, 14, 97) };
   });
   const finish = (e) => {
     if (!drag || e.pointerId !== drag.pointerId) return;
-    const target = drag.target;
+    // Only a chair the avatar has actually reached counts.
+    const target = nearestFreeChair({ left: drag.pos.x, top: drag.pos.y });
+    drag.target = target;
     endDrag(target != null && tryClaim(target));
   };
   stage.addEventListener('pointerup', finish);
