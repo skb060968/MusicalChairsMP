@@ -31,7 +31,7 @@
 import { avatarInfo } from './avatars.js';
 import { createRig25d, GAIT_SPEEDS, BALL_RADIUS } from './rig25d.js';
 
-/** Radius of a held ball in box px at --chr-scale 1; draw field balls this size × scale. */
+/** Radius of a held ball in box px at --chr-scale 1 (a 10 px ball). */
 export { BALL_RADIUS };
 
 export const CHARACTER_RIG_VERSION = '2.0.0';

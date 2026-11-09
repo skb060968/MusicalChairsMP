@@ -47,8 +47,8 @@ const DIM = Object.freeze({
   thighW: 5.6, shinW: 4.4, shoeW: 3.2, upperW: 3.7, foreW: 3.2,
 });
 const H_STAND = DIM.thigh + DIM.shin + DIM.ankleH + DIM.hipDrop;
-/** Radius of a ball held in the hand (rig units). Games should draw their field ball this size too. */
-export const BALL_RADIUS = 3.2;
+/** Radius of a ball held in the hand (rig units ≈ px at scale 1): a 10 px ball. */
+export const BALL_RADIUS = 5;
 export const RIG_HEIGHT = Math.round(H_STAND + DIM.torso + DIM.neckHead + DIM.headRy + 1.5);
 
 /* ======================= SMALL MATH ======================= */
