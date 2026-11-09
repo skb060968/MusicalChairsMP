@@ -283,11 +283,9 @@ function startOrbit() {
       ks.forEach((key, i) => {
         const entry = actors.get(key);
         if (!entry) return;
-        // prev = the view drawn now, so the view only changes once it is clearly
-        // into the next quarter of the circle (no flicker at the boundaries).
-        const p = orbitPoint(i, ks.length, orbit.phase, { ...ORBIT, prev: entry.ch.facing });
-        if (p.facing !== entry.ch.facing) entry.ch.setFacing(p.facing);
-        entry.ch.moveTo(p.x, p.y, { animate: false });
+        // Facing 'auto': each walker turns smoothly along the circle (characters.js).
+        const p = orbitPoint(i, ks.length, orbit.phase, ORBIT);
+        entry.ch.moveTo(p.x, p.y);
       });
       orbit.raf = requestAnimationFrame(frame);
     };
@@ -303,9 +301,12 @@ function stopOrbit() {
   clearTimeout(orbit.gatherTimer);
   orbit.gatherTimer = 0;
   actors.forEach((entry) => {
-    entry.ch.setRunning(false).setGait(300).setFacing('front').setFacing('auto');
+    entry.ch.setRunning(false).setGait(300).setFacing('auto');
     const p = entry.ch.position;
-    if (p) entry.home = p;
+    if (p) {
+      entry.home = p;
+      entry.ch.faceToward(50 - p.x, 50 - p.y);         // turn in toward the chairs
+    }
   });
 }
 

@@ -357,8 +357,9 @@ body {
         only the Musical Chairs extras on top) ---- */
 .mc-floor .mc-actor { pointer-events: none; }
 .mc-floor .mc-actor.draggable { pointer-events: auto; cursor: grab; }
-/* "drag me": the head bobs while it is your turn to grab a chair */
-.mc-floor .mc-actor.draggable:not(.dragging) .chr-head { animation: mc-nudge 0.9s ease-in-out infinite; }
+/* "drag me": the player hops gently while it is your turn to grab a chair
+   (.chr-canvas is the drawn body in the 2.5D rig) */
+.mc-floor .mc-actor.draggable:not(.dragging) .chr-canvas { animation: mc-nudge 0.9s ease-in-out infinite; }
 .mc-floor .mc-actor.dragging { cursor: grabbing; --chr-boost: 1.28; }
 /* Seated: soft green glow on the ground under the chair */
 .mc-floor .mc-actor.seated .chr-shadow { background: radial-gradient(ellipse, rgba(74, 222, 128, 0.55), rgba(0, 0, 0, 0.3) 70%); width: 38px; }

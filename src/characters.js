@@ -1,10 +1,16 @@
 /**
- * Shared character rig — cartoon players with a drawn face (src/avatars.js) on a
- * body that runs, walks, sits, turns around and shows emotions.
+ * Shared character rig — 2.5D cartoon players (v2).
  *
- * SHARED PLATFORM FILE. Self-contained: it injects its own styles (all classes are
- * prefixed `chr-`) and depends only on avatars.js. To use it in another game, copy
- * avatars.js + characters.js into that game's src/ unchanged.
+ * Each player is a small 3D skeleton drawn with flat, code-drawn parts on its own
+ * canvas (src/rig25d.js), with the player's SVG face (src/avatars.js) as the head.
+ * Real knees and elbows, smooth turning to any angle, walk / jog / run / sprint
+ * picked from the actual movement speed (feet don't slide), throws, pick-ups,
+ * catches, sitting, cheering and sulking.
+ *
+ * SHARED PLATFORM FILE. Copy avatars.js + rig25d.js + characters.js into a game's
+ * src/ UNCHANGED, and keep every game's copies identical (edit one, copy to the rest).
+ * It injects its own styles (classes are prefixed `chr-`); no other dependencies.
+ * Dev page: SevenStones/lab/rig.html (all moves, poses and a timing readout).
  *
  *   import { createCharacter } from './characters.js';
  *   const ch = createCharacter({ avatarId: 'f2', jersey: '#1e88e5', label: 'Meera' });
@@ -14,144 +20,75 @@
  *
  * Coordinates are % of the containing element (left/top). The character is drawn
  * above that point, so keep players ~15% away from the container's top edge.
- * Size: set `--chr-scale` on the character or any ancestor (default 1 = 40×62 px).
- * Depth: players lower on screen draw in front (z-index = zBase + y).
+ * Size: set `--chr-scale` on the character or any ancestor (default 1 ≈ 40×62 px).
+ * Depth: players lower on screen draw in front (z-index = zBase + y). With the
+ * `depth` option they also get smaller toward the top of the field.
+ *
+ * Cost: all characters share one requestAnimationFrame loop. A standing player
+ * redraws ~11 times a second (breathing), a moving one every frame; a player that
+ * is not on screen is skipped.
  */
-import { avatarInfo, avatarSvg, avatarBackSvg } from './avatars.js';
+import { avatarInfo } from './avatars.js';
+import { createRig25d, GAIT_SPEEDS } from './rig25d.js';
+
+export const CHARACTER_RIG_VERSION = '2.0.0';
+/** A move longer than this (in %) with no glide is a teleport: no run, no turn. */
+export const TELEPORT_PCT = 20;
+
+/* Layout box (scale 1): 40 × 62 px with the feet at the bottom centre. The canvas
+   reaches past the box so raised arms, jumps and long strides are not cut off. */
+const BOX_H = 62;
+const CV_W = 80;
+const CV_H = 90;
+const CV_LEFT = -20;                 // canvas position inside the box
+const CV_TOP = -20;
+const FEET_X = 20 - CV_LEFT;         // feet inside the canvas
+const FEET_Y = BOX_H - CV_TOP;
+const IDLE_FRAME_MS = 90;            // standing still: ~11 fps is enough for breathing
+const MEASURE_MS = 1500;             // re-check on-screen size this often
 
 /* ======================= STYLES ======================= */
 
-const STYLE_ID = 'chr-styles';
+const STYLE_ID = 'chr-styles-v2';
 const STYLES = `
 .chr {
   position: absolute; width: 40px; height: 62px;
-  transform: translate(-50%, -100%) scale(calc(var(--chr-scale, 1) * var(--chr-boost, 1)));
+  transform: translate(-50%, -100%) scale(calc(var(--chr-scale, 1) * var(--chr-boost, 1) * var(--chr-depth, 1)));
   transform-origin: 50% 100%;
   pointer-events: none; -webkit-user-select: none; user-select: none;
-  --chr-jersey: #e53935; --chr-jersey-dark: #a31f1c; --chr-skin: #c98b5d; --chr-shorts: #33261f;
-  --chr-gait: 0.3s;
 }
 .chr.chr-glide { transition: left var(--chr-glide, 0.28s) var(--chr-glide-ease, ease-out), top var(--chr-glide, 0.28s) var(--chr-glide-ease, ease-out); }
 .chr-shadow { position: absolute; left: 50%; bottom: -4px; width: 30px; height: 9px; transform: translateX(-50%);
-  border-radius: 50%; background: rgba(0, 0, 0, 0.35); filter: blur(1px); }
+  border-radius: 50%; background: rgba(0, 0, 0, 0.32); filter: blur(1px); }
+.chr-canvas { position: absolute; left: ${CV_LEFT}px; top: ${CV_TOP}px; width: ${CV_W}px; height: ${CV_H}px; display: block; z-index: 1; }
+.chr-hand, .chr-hat { position: absolute; left: 0; top: 0; z-index: 2; line-height: 0; pointer-events: none; }
 .chr-ring { display: none; }
-.chr-body, .chr-bob, .chr-rig { position: absolute; inset: 0; transform-origin: 50% 100%; }
-.chr-head { position: absolute; left: 50%; top: -3px; width: 28px; height: 31px; transform: translateX(-50%);
-  z-index: 3; filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.35)); }
-.chr-face, .chr-face-back { display: block; width: 100%; height: 100%; }
-.chr-face svg, .chr-face-back svg { display: block; width: 100%; height: 100%; }
-.chr-face-back { display: none; }
-.chr-torso { position: absolute; left: 10px; top: 21px; width: 20px; height: 19px; border-radius: 8px 8px 5px 5px; z-index: 2;
-  background: linear-gradient(180deg, var(--chr-jersey) 0%, var(--chr-jersey) 70%, var(--chr-jersey-dark) 100%);
-  box-shadow: inset -3px 0 0 rgba(0, 0, 0, 0.15); }
-.chr-leg, .chr-arm { position: absolute; transform-origin: 50% 0; border-radius: 3px 3px 4px 4px; }
-.chr-leg { top: 38px; width: 7px; height: 21px; z-index: 1;
-  background: linear-gradient(180deg, var(--chr-shorts) 0 38%, var(--chr-skin) 38% 82%, #1d1d1d 82%); }
-.chr-leg-l { left: 12px; } .chr-leg-r { left: 21px; }
-.chr-arm { top: 23px; width: 6px; height: 17px; background: linear-gradient(180deg, var(--chr-jersey) 0 40%, var(--chr-skin) 40%); }
-.chr-arm-back { left: 7px; z-index: 1; filter: brightness(0.8); }
-.chr-arm-front { left: 27px; z-index: 3; }
-.chr-hand { position: absolute; left: 50%; bottom: -6px; transform: translateX(-50%); line-height: 0; }
-.chr-hat { position: absolute; left: 50%; top: -12px; transform: translateX(-50%); z-index: 5; line-height: 0; }
-.chr-label { position: absolute; left: 50%; top: calc(100% + 7px); transform: translateX(-50%);
+.chr-burst { position: absolute; left: 50%; bottom: -8px; width: 44px; height: 16px; margin-left: -22px; border-radius: 50%;
+  border: 3px solid var(--chr-burst, #ffd700); opacity: 0; pointer-events: none; }
+.chr-label { position: absolute; left: 50%; top: calc(100% + 7px); transform: translateX(-50%); z-index: 3;
   max-width: 78px; padding: 0 4px; border-radius: 999px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   font: 800 10px/1.35 system-ui, sans-serif; color: #fff; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8); }
 .chr-label[hidden] { display: none; }
 
-/* facing */
-.chr.chr-face-left .chr-rig { transform: scaleX(-1); }
-.chr.chr-away .chr-face { display: none; }
-.chr.chr-away .chr-face-back { display: block; }
-.chr.chr-away .chr-torso { background: linear-gradient(180deg, var(--chr-jersey-dark) 0 12%, var(--chr-jersey) 12% 72%, var(--chr-jersey-dark) 100%); }
-
-/* gait — one cycle = two steps (2 × --chr-gait); left and right are half a cycle apart.
-   SIDE view (walking left/right): legs and arms swing forward/back, body leans in.
-   FRONT / BACK view (walking toward / away from the camera): knees lift in turn and
-   the arms swing toward / away from the camera (foreshortened), no lean. */
-.chr.chr-running .chr-bob { animation: chr-bob calc(var(--chr-gait) / 2) ease-in-out infinite alternate; }
-.chr.chr-running.chr-side .chr-leg-l     { animation: chr-leg var(--chr-gait) ease-in-out infinite alternate; }
-.chr.chr-running.chr-side .chr-leg-r     { animation: chr-leg var(--chr-gait) ease-in-out calc(var(--chr-gait) * -1) infinite alternate; }
-.chr.chr-running.chr-side .chr-arm-back  { animation: chr-arm var(--chr-gait) ease-in-out calc(var(--chr-gait) * -1) infinite alternate; }
-.chr.chr-running.chr-side .chr-arm-front { animation: chr-arm var(--chr-gait) ease-in-out infinite alternate; }
-.chr.chr-running.chr-side .chr-rig       { rotate: 6deg; }
-.chr.chr-running.chr-side.chr-face-left .chr-rig { rotate: -6deg; }
-.chr.chr-side .chr-leg-l { left: 13px; }      /* side on, the legs overlap more */
-.chr.chr-side .chr-leg-r { left: 20px; }
-.chr.chr-running:not(.chr-side) .chr-leg-l     { animation: chr-march calc(var(--chr-gait) * 2) ease-in-out infinite; }
-.chr.chr-running:not(.chr-side) .chr-leg-r     { animation: chr-march calc(var(--chr-gait) * 2) ease-in-out calc(var(--chr-gait) * -1) infinite; }
-.chr.chr-running:not(.chr-side) .chr-arm-back  { animation: chr-arm-fb calc(var(--chr-gait) * 2) ease-in-out calc(var(--chr-gait) * -1) infinite; }
-.chr.chr-running:not(.chr-side) .chr-arm-front { animation: chr-arm-fb calc(var(--chr-gait) * 2) ease-in-out infinite; }
-.chr:not(.chr-running):not(.chr-sit) .chr-bob { animation: chr-idle 1.8s ease-in-out infinite; }
-@keyframes chr-leg { from { transform: rotate(34deg); } to { transform: rotate(-34deg); } }
-@keyframes chr-arm { from { transform: rotate(-40deg); } to { transform: rotate(40deg); } }
-/* knee lift seen from the front: the leg shortens from the hip, the foot rises */
-@keyframes chr-march { 0%, 100% { transform: translateY(0) scaleY(1); } 50% { transform: translateY(-1px) scaleY(0.72); } }
-/* arm swinging toward the camera looks shorter */
-@keyframes chr-arm-fb { 0%, 100% { transform: scaleY(1); } 50% { transform: scaleY(0.7); } }
-@keyframes chr-bob { from { transform: translateY(0); } to { transform: translateY(-3px); } }
-@keyframes chr-idle { 0%, 100% { transform: scaleY(1); } 50% { transform: scaleY(0.97); } }
-
-/* sitting (seen from the front: thighs toward the camera, body lowered) */
-.chr.chr-sit .chr-bob { animation: none !important; transform: translateY(8px); }
-.chr.chr-sit .chr-rig { rotate: 0deg !important; }
-.chr.chr-sit .chr-leg { animation: none !important; top: 37px; height: 13px;
-  background: linear-gradient(180deg, var(--chr-shorts) 0 46%, var(--chr-skin) 46% 74%, #1d1d1d 74%); }
-.chr.chr-sit .chr-leg-l { transform: rotate(16deg); }
-.chr.chr-sit .chr-leg-r { transform: rotate(-16deg); }
-.chr.chr-sit .chr-arm { animation: none !important; transform: rotate(-14deg); }
-.chr.chr-sit .chr-arm-front { transform: rotate(14deg); }
-
-/* throwing (ball games) */
-.chr.chr-aim .chr-arm-front { animation: none !important; transform: rotate(-155deg); transition: transform 0.12s ease-out; }
-.chr.chr-aim .chr-arm-back  { animation: none !important; transform: rotate(25deg); }
-.chr.chr-throw .chr-arm-front { animation: chr-throw-arm 0.45s ease-out both !important; }
-.chr.chr-throw .chr-arm-back  { animation: chr-throw-arm-back 0.45s ease-out both !important; }
-.chr.chr-throw .chr-body      { animation: chr-lunge 0.45s ease-out both; }
-@keyframes chr-throw-arm { 0% { transform: rotate(-155deg); } 35% { transform: rotate(-200deg); } 70% { transform: rotate(-30deg); } 100% { transform: rotate(0); } }
-@keyframes chr-throw-arm-back { 0% { transform: rotate(25deg); } 50% { transform: rotate(-30deg); } 100% { transform: rotate(0); } }
-@keyframes chr-lunge { 40% { transform: translateY(-4px) scale(1.03, 1.05); } 70% { transform: translateY(1px) scale(1.04, 0.95); } }
-
 /* flags */
 .chr.chr-self { --chr-boost: 1.15; }
-.chr.chr-self .chr-body { filter: drop-shadow(0 0 1.5px #fff) drop-shadow(0 0 1.5px #fff) drop-shadow(0 0 6px rgba(255, 235, 59, 0.6)); }
+.chr.chr-self .chr-canvas { filter: drop-shadow(0 0 1.2px #fff) drop-shadow(0 0 1.2px #fff) drop-shadow(0 0 5px rgba(255, 235, 59, 0.6)); }
+.chr.chr-highlight .chr-canvas { filter: drop-shadow(0 0 6px rgba(255, 215, 0, 0.95)); }
+.chr.chr-speaking .chr-canvas { filter: drop-shadow(0 0 3px #4ade80) drop-shadow(0 0 6px #4ade80); }
+.chr.chr-self.chr-speaking .chr-canvas { filter: drop-shadow(0 0 1.2px #fff) drop-shadow(0 0 3px #4ade80) drop-shadow(0 0 6px #4ade80); }
 .chr.chr-self .chr-ring, .chr.chr-highlight .chr-ring {
   display: block; position: absolute; left: 50%; bottom: -8px; width: 44px; height: 16px; transform: translateX(-50%);
   border-radius: 50%; border: 3px solid #ffeb3b;
   box-shadow: 0 0 10px rgba(255, 235, 59, 0.7), inset 0 0 6px rgba(255, 235, 59, 0.5);
   animation: chr-ring 1.4s ease-in-out infinite; }
 .chr.chr-highlight .chr-ring { border-color: #ffd700; animation-duration: 0.7s; }
-.chr.chr-highlight .chr-body { filter: drop-shadow(0 0 6px rgba(255, 215, 0, 0.95)); }
 .chr.chr-self .chr-label { background: #ffeb3b; color: #3e2723; text-shadow: none; }
 .chr.chr-label-above .chr-label { top: auto; bottom: calc(100% + 4px); }
 .chr.chr-offline { opacity: 0.45; filter: grayscale(0.8); }
 .chr.chr-faded { opacity: 0.4; filter: grayscale(0.85); }
-.chr.chr-speaking .chr-head { filter: drop-shadow(0 0 3px #4ade80) drop-shadow(0 0 6px #4ade80); }
 @keyframes chr-ring { 0%, 100% { transform: translateX(-50%) scale(1); opacity: 1; } 50% { transform: translateX(-50%) scale(1.18); opacity: 0.65; } }
 
-/* emotions */
-.chr.chr-happy .chr-body { animation: chr-jump 1.3s cubic-bezier(.3, .7, .4, 1) both; }
-.chr.chr-happy .chr-arm-front { animation: chr-arms-up 1.3s ease-out both !important; }
-.chr.chr-happy .chr-arm-back  { animation: chr-arms-up-back 1.3s ease-out both !important; }
-@keyframes chr-jump {
-  0% { transform: translateY(0) scale(1); filter: drop-shadow(0 0 0 rgba(255, 215, 0, 0)); }
-  12% { transform: translateY(0) scale(1.1, 0.85); }
-  28% { transform: translateY(-26px) scale(1.05); filter: drop-shadow(0 0 10px rgba(255, 215, 0, 1)); }
-  42% { transform: translateY(0) scale(1.1, 0.88); }
-  56% { transform: translateY(-16px) scale(1.03); filter: drop-shadow(0 0 12px rgba(124, 255, 120, 0.9)); }
-  70% { transform: translateY(0) scale(1.05, 0.95); }
-  100% { transform: translateY(0) scale(1); filter: drop-shadow(0 0 0 rgba(255, 215, 0, 0)); } }
-@keyframes chr-arms-up      { 0%, 100% { transform: rotate(0); } 15%, 80% { transform: rotate(-160deg); } }
-@keyframes chr-arms-up-back { 0%, 100% { transform: rotate(0); } 15%, 80% { transform: rotate(160deg); } }
-.chr.chr-sad .chr-body { animation: chr-sad 1.6s ease-out both; }
-.chr.chr-sad .chr-head { animation: chr-droop 1.6s ease-out both; }
-.chr.chr-sad .chr-arm  { animation: none !important; transform: rotate(8deg); }
-@keyframes chr-sad {
-  0% { transform: translateX(0); filter: saturate(1) drop-shadow(0 0 0 rgba(229, 57, 53, 0)); }
-  8% { transform: translateX(-5px) scale(0.97); filter: saturate(0.6) drop-shadow(0 0 10px rgba(229, 57, 53, 1)); }
-  16% { transform: translateX(5px); } 24% { transform: translateX(-4px); } 32% { transform: translateX(3px); }
-  45%, 80% { transform: translateX(0) scale(0.92, 0.88); filter: saturate(0.5) brightness(0.85) drop-shadow(0 0 8px rgba(229, 57, 53, 0.85)); }
-  100% { transform: translateX(0) scale(1); filter: saturate(1) drop-shadow(0 0 0 rgba(229, 57, 53, 0)); } }
-@keyframes chr-droop { 0%, 100% { transform: translateX(-50%) rotate(0); } 40%, 85% { transform: translateX(-50%) translateY(4px) rotate(-14deg); } }
+/* floating emoji (emote) */
 .chr-float { position: absolute; left: 50%; bottom: 100%; transform: translate(-50%, 0); z-index: 6;
   font-size: 22px; line-height: 1; pointer-events: none; filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.5));
   animation: chr-rise 1.5s ease-out forwards; }
@@ -164,8 +101,7 @@ const STYLES = `
   75% { transform: translate(-50%, -12px) scale(1); opacity: 1; } 100% { transform: translate(-50%, 0) scale(0.9); opacity: 0; } }
 
 @media (prefers-reduced-motion: reduce) {
-  .chr .chr-body, .chr .chr-bob, .chr .chr-leg, .chr .chr-arm, .chr .chr-head, .chr .chr-ring {
-    animation-duration: 0.01s !important; animation-iteration-count: 1 !important; }
+  .chr .chr-ring { animation: none; }
   .chr-float { animation-duration: 1s; }
 }
 `;
@@ -178,15 +114,6 @@ export function injectCharacterStyles() {
   document.head.appendChild(style);
 }
 
-/* ======================= RIG ======================= */
-
-const RIG_HTML = '<span class="chr-ring"></span><span class="chr-shadow"></span>'
-  + '<span class="chr-body"><span class="chr-bob"><span class="chr-rig">'
-  + '<span class="chr-arm chr-arm-back"></span><span class="chr-leg chr-leg-l"></span><span class="chr-leg chr-leg-r"></span>'
-  + '<span class="chr-torso"></span><span class="chr-arm chr-arm-front"><span class="chr-hand"></span></span>'
-  + '</span><span class="chr-head"><span class="chr-face"></span><span class="chr-face-back"></span><span class="chr-hat"></span></span>'
-  + '</span></span><span class="chr-label" hidden></span>';
-
 /** Shirt colours that read well on dark and light fields (pick one per player or per team). */
 export const JERSEYS = Object.freeze([
   ['#e53935', '#a31f1c'], ['#1e88e5', '#0d47a1'], ['#43a047', '#1b5e20'], ['#fb8c00', '#c25e00'],
@@ -198,12 +125,62 @@ const FLAG_CLASSES = Object.freeze({
   faded: 'chr-faded', speaking: 'chr-speaking', labelAbove: 'chr-label-above',
 });
 
-function darken(hex, amount = 0.3) {
-  const n = Number.parseInt(String(hex).replace('#', ''), 16);
-  if (!Number.isFinite(n)) return hex;
-  const c = (s) => Math.round(((n >> s) & 255) * (1 - amount));
-  return `#${((c(16) << 16) | (c(8) << 8) | c(0)).toString(16).padStart(6, '0')}`;
+/** Yaw for the named views (0 = facing the camera, 90 = screen right). */
+const VIEW_YAW = Object.freeze({ front: 0, right: 90, away: 180, left: 270 });
+/** Poses that are one-shot clips (the rest of setPose's names are held). */
+const POSE_CLIPS = new Set(['throw', 'pickup', 'catch']);
+const HELD_POSES = new Set(['sit', 'aim', 'crouch']);
+
+const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+const reduceMotion = () => typeof window !== 'undefined'
+  && Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
+
+/** Legacy stride time (ms per step, ~300 run / ~450 walk) → ground speed (rig units / s). */
+function speedForStride(ms) {
+  const table = [[240, GAIT_SPEEDS.sprint], [300, GAIT_SPEEDS.run], [340, GAIT_SPEEDS.jog], [450, GAIT_SPEEDS.walk]];
+  if (ms <= table[0][0]) return table[0][1];
+  for (let i = 1; i < table.length; i += 1) {
+    const [m1, s1] = table[i];
+    if (ms <= m1) {
+      const [m0, s0] = table[i - 1];
+      return s0 + ((s1 - s0) * (ms - m0)) / (m1 - m0);
+    }
+  }
+  return table[table.length - 1][1];
 }
+
+/* ======================= SHARED FRAME LOOP ======================= */
+
+const live = new Set();
+let raf = 0;
+let lastTs = 0;
+const stats = { characters: 0, drawn: 0, ms: 0 };
+
+function wakeLoop() {
+  if (raf || !live.size || typeof requestAnimationFrame !== 'function') return;
+  raf = requestAnimationFrame(tick);
+}
+function tick(ts) {
+  raf = 0;
+  const dt = lastTs ? Math.min(0.1, Math.max(0, (ts - lastTs) / 1000)) : 1 / 60;
+  lastTs = ts;
+  const t0 = now();
+  let drawn = 0;
+  live.forEach((c) => { if (c._frame(ts, dt)) drawn += 1; });
+  stats.characters = live.size;
+  stats.drawn = drawn;
+  stats.ms = now() - t0;
+  if (live.size) raf = requestAnimationFrame(tick);
+  else lastTs = 0;
+}
+
+/** Timing of the last frame: { characters, drawn, ms } (for diagnostics). */
+export function characterStats() {
+  return { ...stats };
+}
+
+/* ======================= CHARACTER ======================= */
 
 /**
  * @param {object} [opts]
@@ -211,60 +188,193 @@ function darken(hex, amount = 0.3) {
  * @param {string} [opts.jersey]     shirt colour (hex); [opts.jerseyDark] its shade
  * @param {string} [opts.label]      name tag under the feet
  * @param {number} [opts.zBase=20]   depth sort base (z-index = zBase + y%)
+ * @param {number[]} [opts.depth]    [scaleAtTop, scaleAtBottom], e.g. [0.86, 1.12]:
+ *   players shrink toward the top of the field (perspective). Default: no change.
  * @returns character handle (see methods below); `handle.el` is the element to append
  */
 export function createCharacter(opts = {}) {
   injectCharacterStyles();
   const el = document.createElement('div');
   el.className = 'chr';
-  el.innerHTML = RIG_HTML;
-  const q = (sel) => el.querySelector(sel);
-  const face = q('.chr-face');
-  const faceBack = q('.chr-face-back');
-  const label = q('.chr-label');
-  const hand = q('.chr-hand');
-  const hat = q('.chr-hat');
-  const zBase = Number.isFinite(opts.zBase) ? opts.zBase : 20;
+  const ring = document.createElement('span');
+  ring.className = 'chr-ring';
+  const shadow = document.createElement('span');
+  shadow.className = 'chr-shadow';
+  const burst = document.createElement('span');
+  burst.className = 'chr-burst';
+  const canvas = document.createElement('canvas');
+  canvas.className = 'chr-canvas';
+  const hand = document.createElement('span');
+  hand.className = 'chr-hand';
+  hand.hidden = true;
+  const hat = document.createElement('span');
+  hat.className = 'chr-hat';
+  hat.hidden = true;
+  const label = document.createElement('span');
+  label.className = 'chr-label';
+  label.hidden = true;
+  el.append(ring, shadow, burst, canvas, hand, hat, label);
 
-  let avatarId = null;
+  const ctx = canvas.getContext('2d');
+  const rig = createRig25d({ avatarId: opts.avatarId || null });
+  rig.shadow = false;                           // the HTML shadow above is styleable by games
+  rig.idleMotion = !reduceMotion();
+  const zBase = Number.isFinite(opts.zBase) ? opts.zBase : 20;
+  const depthRange = Array.isArray(opts.depth) && opts.depth.length === 2 ? opts.depth.map(Number) : null;
+
   let pos = null;
-  let facing = 'auto';      // requested: 'auto' or a fixed view
-  let view = 'front';       // what is drawn: 'front' | 'away' | 'left' | 'right'
-  const applyView = (v) => {
-    view = v;
-    el.classList.toggle('chr-away', v === 'away');
-    el.classList.toggle('chr-face-left', v === 'left');
-    el.classList.toggle('chr-side', v === 'left' || v === 'right');
-  };
-  let pose = null;
-  let runTimer = null;
-  let poseTimer = null;
-  let emoteTimer = null;
+  let facing = 'auto';                          // 'auto' or 'fixed'
+  let labelText = '';
   let glideTimer = null;
+  let depthNow = 1;
+  const floats = new Set();                     // emoji anchors that follow the player
+
+  // Movement → speed.
+  let lastMoveAt = 0;
+  let measured = 0;                             // rig units / s from the last moves
+  let autoUntil = 0;                            // animate:true moves keep the gait on until then
+  let seenUntil = 0;                            // any recent move (for forced running)
+  let runForced = false;
+  let runUntil = 0;
+  let strideMs = 300;
+
+  // Drawing.
+  let res = 0;                                  // canvas px per box px
+  let visible = true;
+  let parentW = 0;
+  let parentH = 0;
+  let baseScale = 1;                            // box px → container px, without depth
+  let lastMeasure = -Infinity;
+  let lastDraw = -Infinity;
+  let pending = 0;
+  let dirty = true;
+  let drewSettled = false;
+  let faceReady = false;
+  let detachedAt = 0;
+  const hatAt = { x: NaN, y: NaN };
+  const handAt = { x: NaN, y: NaN };
+
+  const wake = () => {
+    dirty = true;
+    if (!live.has(api)) live.add(api);
+    wakeLoop();
+  };
+
+  function measure(t) {
+    lastMeasure = t;
+    const parent = el.parentElement;
+    if (!parent) return;
+    parentW = parent.clientWidth;
+    parentH = parent.clientHeight;
+    const er = el.getBoundingClientRect();
+    visible = er.width > 0 && er.height > 0;
+    if (!visible) return;
+    const pr = parent.getBoundingClientRect();
+    const parentScale = parentW ? pr.width / parentW : 1;
+    const screen = er.height / BOX_H;                         // on-screen px per box px
+    baseScale = screen / (parentScale || 1) / (depthNow || 1);
+    const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
+    const want = clamp(screen * dpr, 0.75, 6);
+    if (!res || Math.abs(want - res) / res > 0.08) {
+      res = want;
+      canvas.width = Math.round(CV_W * res);
+      canvas.height = Math.round(CV_H * res);
+      dirty = true;
+    }
+  }
+
+  /** Box px → container px for this player right now. */
+  const localScale = () => baseScale * depthNow;
+
+  function drive(t) {
+    if (runForced && runUntil && t > runUntil) { runForced = false; runUntil = 0; }
+    let sp = t < autoUntil ? measured : 0;
+    if (runForced) sp = t < seenUntil && measured > 2 ? measured : speedForStride(strideMs);
+    if (rig.holdName === 'sit') sp = 0;
+    rig.setSpeed(sp);
+  }
+
+  function placeOverlays() {
+    const cx = (x) => x + CV_LEFT;
+    const cy = (y) => y + CV_TOP;
+    if (!hat.hidden) {
+      const x = cx(rig.headTop.x);
+      const y = cy(rig.headTop.y);                           // the item's bottom edge sits on the hair
+      if (Math.abs(x - hatAt.x) > 0.3 || Math.abs(y - hatAt.y) > 0.3) {
+        hatAt.x = x;
+        hatAt.y = y;
+        hat.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) translate(-50%, -100%)`;
+      }
+    }
+    if (!hand.hidden) {
+      const x = cx(rig.hand.x);
+      const y = cy(rig.hand.y);
+      if (Math.abs(x - handAt.x) > 0.3 || Math.abs(y - handAt.y) > 0.3) {
+        handAt.x = x;
+        handAt.y = y;
+        hand.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) translate(-50%, -50%)`;
+      }
+    }
+  }
+
+  function draw() {
+    if (!res) return;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.setTransform(res, 0, 0, res, 0, 0);
+    rig.draw(ctx, FEET_X, FEET_Y, 1);
+    placeOverlays();
+  }
 
   const api = {
     el,
 
+    /** @private Called by the shared loop. Returns true when it drew. */
+    _frame(t, dt) {
+      if (!el.isConnected) {
+        if (!detachedAt) detachedAt = t;
+        else if (t - detachedAt > 10000) live.delete(api);       // re-added by the next call
+        return false;
+      }
+      detachedAt = 0;
+      pending += dt;
+      // Hidden players (display: none) are checked more often so they reappear at once.
+      if (t - lastMeasure > (visible && res ? MEASURE_MS : 250)) measure(t);
+      if (!visible) return false;
+      drive(t);
+      if (rig.face.ready !== faceReady) { faceReady = rig.face.ready; dirty = true; }
+      const settled = rig.isSettled() && !dirty;
+      if (settled && (rig.idleMotion ? t - lastDraw < IDLE_FRAME_MS : drewSettled)) return false;
+      rig.update(pending);
+      pending = 0;
+      draw();
+      lastDraw = t;
+      dirty = false;
+      drewSettled = settled;
+      return true;
+    },
+
     setAvatar(id) {
-      const info = avatarInfo(id);
-      if (info.id === avatarId) return api;
-      avatarId = info.id;
-      face.innerHTML = avatarSvg(info.id);
-      faceBack.innerHTML = avatarBackSvg(info.id);
-      el.style.setProperty('--chr-skin', info.skin);   // arms and legs match the face
+      if (avatarInfo(id).id === rig.avatarId) return api;      // games call this on every render
+      rig.setAvatar(id);
+      faceReady = false;
+      wake();
       return api;
     },
 
     setJersey(color, dark) {
       if (!color) return api;
-      el.style.setProperty('--chr-jersey', color);
-      el.style.setProperty('--chr-jersey-dark', dark || darken(color));
+      rig.setJersey(color, dark);
+      wake();
       return api;
     },
 
     setLabel(text) {
-      label.textContent = text ? String(text) : '';
-      label.hidden = !text;
+      const t = text ? String(text) : '';
+      if (t === labelText) return api;
+      labelText = t;
+      label.textContent = t;
+      label.hidden = !t;
       return api;
     },
 
@@ -272,14 +382,15 @@ export function createCharacter(opts = {}) {
     get position() { return pos ? { ...pos } : null; },
 
     /**
-     * Place the feet at (x, y) %. Moving switches the run cycle on and (with
-     * facing 'auto') turns the body toward the direction of travel.
+     * Place the feet at (x, y) %. Moving plays the walk / run (chosen from the speed)
+     * and, with facing 'auto', turns the body toward the direction of travel.
      * @param {object} [o]
      * @param {number}  [o.glide=0]   ms to slide there (CSS transition) — 0 = jump
      * @param {string}  [o.ease='ease-out'] glide timing; 'linear' suits a stream of network updates
-     * @param {boolean} [o.animate=true] play the run cycle / auto-facing for this move
+     * @param {boolean} [o.animate=true] play the gait / auto-facing for this move
      */
     moveTo(x, y, { glide = 0, ease = 'ease-out', animate = true } = {}) {
+      const t = now();
       const prev = pos;
       pos = { x, y };
       clearTimeout(glideTimer);
@@ -294,57 +405,128 @@ export function createCharacter(opts = {}) {
       el.style.left = `${x}%`;
       el.style.top = `${y}%`;
       el.style.zIndex = String(zBase + Math.max(0, Math.min(100, Math.round(y))));
-      if (!animate || !prev) return api;
-      const dx = x - prev.x;
-      const dy = y - prev.y;
-      const d = Math.hypot(dx, dy);
-      if (d < 0.02 || (d > 20 && glide === 0)) return api;           // still, or a teleport
-      if (facing === 'auto') applyView(viewForMotion(dx, dy, view));
-      api.setRunning(true, Math.max(260, glide + 80));
-      return api;
-    },
-
-    /** 'auto' (follow movement) | 'front' | 'left' | 'right' | 'away' */
-    setFacing(f) {
-      facing = f || 'auto';
-      if (facing !== 'auto') applyView(facing);
-      return api;
-    },
-
-    /** The view currently drawn: 'front' | 'away' | 'left' | 'right'. */
-    get facing() { return view; },
-
-    /** Run cycle on/off. `holdMs` turns it off again after that long (0 = until told). */
-    setRunning(on, holdMs = 0) {
-      clearTimeout(runTimer);
-      el.classList.toggle('chr-running', Boolean(on));
-      if (on && holdMs > 0) runTimer = setTimeout(() => el.classList.remove('chr-running'), holdMs);
-      return api;
-    },
-
-    /** Stride length in ms per step: ~300 = run, ~450 = walk. */
-    setGait(ms) {
-      el.style.setProperty('--chr-gait', `${Math.max(120, Number(ms) || 300)}ms`);
-      return api;
-    },
-
-    /** null | 'sit' | 'aim' | 'throw' (throw plays once, ~0.45 s). */
-    setPose(p) {
-      clearTimeout(poseTimer);
-      el.classList.remove('chr-sit', 'chr-aim', 'chr-throw');
-      pose = ['sit', 'aim', 'throw'].includes(p) ? p : null;
-      if (pose === 'sit') el.classList.add('chr-sit');
-      else if (pose === 'aim') el.classList.add('chr-aim');
-      else if (pose === 'throw') {
-        void el.offsetWidth;
-        el.classList.add('chr-throw');
-        poseTimer = setTimeout(() => { el.classList.remove('chr-throw'); pose = null; }, 500);
+      if (depthRange) {
+        const d = depthRange[0] + (depthRange[1] - depthRange[0]) * clamp(y / 100, 0, 1);
+        if (Math.abs(d - depthNow) > 0.004) {
+          depthNow = d;
+          el.style.setProperty('--chr-depth', d.toFixed(3));
+        }
       }
+      floats.forEach((n) => { n.style.left = `${x}%`; n.style.top = `${y}%`; });
+      if (!live.has(api)) live.add(api);
+      wakeLoop();
+
+      if (!prev) { lastMoveAt = t; return api; }
+      const dxp = x - prev.x;
+      const dyp = y - prev.y;
+      const d = Math.hypot(dxp, dyp);
+      // Games re-render often without moving: only real moves count for the speed.
+      if (d < 0.02) return api;                                   // still
+      const since = t - lastMoveAt;
+      lastMoveAt = t;
+      if (d > TELEPORT_PCT && glide === 0) { measured = 0; autoUntil = 0; seenUntil = 0; return api; }
+      if (!parentW && el.isConnected) measure(t);
+      const W = parentW || 400;
+      const H = parentH || 400;
+      const dx = (dxp / 100) * W;
+      const dy = (dyp / 100) * H;
+      const px = Math.hypot(dx, dy);
+      const dtMs = glide > 0 ? Math.max(glide, Math.min(since, 250)) : clamp(since, 8, 250);
+      const inst = px / (dtMs / 1000) / (localScale() || 1);
+      measured = t < seenUntil + 150 && measured > 0 ? measured * 0.5 + inst * 0.5 : inst;
+      seenUntil = t + glide + 130;
+      if (!animate) return api;
+      autoUntil = seenUntil;
+      if (facing === 'auto' && px > 0.2) rig.faceToward(dx, dy);
+      dirty = true;
       return api;
     },
 
-    /** The current pose: null | 'sit' | 'aim' | 'throw'. */
-    get pose() { return pose; },
+    /** 'auto' (follow movement) | 'front' | 'left' | 'right' | 'away' | an angle in degrees. */
+    setFacing(f) {
+      if (f == null || f === 'auto') { facing = 'auto'; return api; }
+      const yaw = typeof f === 'number' ? f : VIEW_YAW[f];
+      if (yaw == null) return api;
+      facing = 'fixed';
+      rig.setYaw(yaw);
+      wake();
+      return api;
+    },
+
+    /** The nearest named view to where the body is turning: 'front' | 'away' | 'left' | 'right'. */
+    get facing() {
+      const y = ((rig.targetYaw % 360) + 360) % 360;
+      if (y < 45 || y >= 315) return 'front';
+      if (y < 135) return 'right';
+      if (y < 225) return 'away';
+      return 'left';
+    },
+
+    /** Facing angle in degrees (0 = toward the camera, 90 = screen right). */
+    get yaw() { return rig.targetYaw; },
+
+    /**
+     * Turn toward a direction on the field (dx, dy in %), e.g. where a player aims or
+     * throws. With facing 'auto' the next move turns the body again.
+     */
+    faceToward(dx, dy) {
+      if (!dx && !dy) return api;
+      if (!parentW && el.isConnected) measure(now());
+      rig.faceToward((dx / 100) * (parentW || 400), (dy / 100) * (parentH || 400));
+      wake();
+      return api;
+    },
+
+    /**
+     * Keep the legs moving even when the position is driven another way (e.g. a group
+     * walking in a circle). `holdMs` turns it off again after that long (0 = until told).
+     */
+    setRunning(on, holdMs = 0) {
+      runForced = Boolean(on);
+      runUntil = runForced && holdMs > 0 ? now() + holdMs : 0;
+      wake();
+      return api;
+    },
+
+    /**
+     * Stride in ms per step: ~450 = walk, ~300 = run, ~240 = sprint. Moves still pick
+     * the gait from the real speed; a slow stride (≥ 400 ms) keeps them walking.
+     */
+    setGait(ms) {
+      strideMs = Math.max(120, Number(ms) || 300);
+      rig.setGaitCap(strideMs >= 400 ? 'walk' : null);
+      return api;
+    },
+
+    /**
+     * Held: 'sit' | 'aim' (ready to throw) | 'crouch'. One-shot: 'throw' (from the
+     * wind-up to the follow-through), 'pickup' (squat and reach), 'catch'. null = normal.
+     * @param {object} [o]
+     * @param {Function} [o.onRelease] throw: called as the ball leaves the hand
+     * @param {number}   [o.rate=1]   one-shot playback speed
+     */
+    setPose(p, { onRelease = null, rate = 1 } = {}) {
+      if (HELD_POSES.has(p)) {
+        if (POSE_CLIPS.has(rig.actionName)) rig.stop();
+        rig.hold(p);
+      } else if (p === 'throw') {
+        rig.hold(null);
+        rig.play('throw', { from: 0.4, rate, onEvent: (n) => { if (n === 'release') onRelease?.(); } });
+      } else if (POSE_CLIPS.has(p)) {
+        rig.hold(null);
+        rig.play(p, { rate });
+      } else {
+        rig.hold(null);
+        if (POSE_CLIPS.has(rig.actionName)) rig.stop();
+      }
+      wake();
+      return api;
+    },
+
+    /** The current pose: null | 'sit' | 'aim' | 'crouch' | 'throw' | 'pickup' | 'catch'. */
+    get pose() {
+      return rig.holdName || (POSE_CLIPS.has(rig.actionName) ? rig.actionName : null);
+    },
 
     /**
      * Boolean flags: self (YOU ring + bigger), highlight (gold ring + glow), offline,
@@ -353,31 +535,70 @@ export function createCharacter(opts = {}) {
     setFlags(flags = {}) {
       Object.entries(flags).forEach(([k, v]) => {
         const cls = FLAG_CLASSES[k];
-        if (cls) el.classList.toggle(cls, Boolean(v));
+        if (cls && el.classList.contains(cls) !== Boolean(v)) el.classList.toggle(cls, Boolean(v));
       });
       return api;
     },
 
-    /** Something held in the throwing hand (a ball…) or carried on the head (a stone…). Node or null. */
-    setHandItem(node) { hand.replaceChildren(...(node ? [node] : [])); return api; },
-    setHeadItem(node) { hat.replaceChildren(...(node ? [node] : [])); return api; },
+    /**
+     * In the throwing hand: 'ball' (drawn with the body, behind or in front of it as
+     * the arm swings), any DOM node (placed over the hand), or null.
+     */
+    setHandItem(item) {
+      if (typeof item === 'string') {
+        rig.setHandItem(item);
+        hand.replaceChildren();
+        hand.hidden = true;
+      } else {
+        rig.setHandItem(null);
+        hand.replaceChildren(...(item ? [item] : []));
+        hand.hidden = !item;
+        handAt.x = NaN;
+      }
+      wake();
+      return api;
+    },
 
     /**
-     * 'happy' (double jump, arms up, gold glow) or 'sad' (shake, slump, red glow); optional floating emoji.
+     * Balanced on the head: 'stone' (drawn), any DOM node (its bottom edge on the hair
+     * line; nudge it down with `position: relative; top: Npx` to sink it in), or null.
+     */
+    setHeadItem(item) {
+      if (typeof item === 'string') {
+        rig.setHeadItem(item);
+        hat.replaceChildren();
+        hat.hidden = true;
+      } else {
+        rig.setHeadItem(null);
+        hat.replaceChildren(...(item ? [item] : []));
+        hat.hidden = !item;
+        hatAt.x = NaN;
+      }
+      wake();
+      return api;
+    },
+
+    /**
+     * 'happy' (jumps with both arms up) or 'sad' (slumps, head down), with a ring
+     * flash on the ground and an optional floating emoji. Seated or moving players
+     * react with the upper body only.
      * @param {object} [o]
      * @param {Element} [o.layer] draw the emoji in this element (same coordinate box as the
      *   character's container) so it sits above every player; default: inside the character
      */
     emote(kind, icon, { layer = null } = {}) {
-      const cls = kind === 'sad' ? 'chr-sad' : 'chr-happy';
-      el.classList.remove('chr-sad', 'chr-happy');
-      void el.offsetWidth;                       // restart if already playing
-      el.classList.add(cls);
-      clearTimeout(emoteTimer);
-      emoteTimer = setTimeout(() => el.classList.remove(cls), kind === 'sad' ? 1700 : 1400);
+      const sad = kind === 'sad';
+      const upper = rig.holdName === 'sit' || rig.speed > 5 || reduceMotion();
+      rig.play(sad ? 'sad' : 'cheer', { mask: upper ? 'upper' : null });
+      el.style.setProperty('--chr-burst', sad ? '#e53935' : '#ffd700');
+      burst.animate?.([
+        { transform: 'scale(0.4)', opacity: 0.95 },
+        { transform: 'scale(2.1)', opacity: 0 },
+      ], { duration: 900, easing: 'ease-out' });
+      wake();
       if (icon) {
         const f = document.createElement('span');
-        f.className = `chr-float${kind === 'sad' ? ' sad' : ''}`;
+        f.className = `chr-float${sad ? ' sad' : ''}`;
         f.textContent = icon;
         let node = f;
         if (layer && pos) {
@@ -385,42 +606,47 @@ export function createCharacter(opts = {}) {
           node.className = 'chr-float-anchor';
           node.style.left = `${pos.x}%`;
           node.style.top = `${pos.y}%`;
-          f.style.bottom = `${Math.round(el.getBoundingClientRect().height) || 62}px`;   // start at head height
+          f.style.bottom = `${Math.round(el.getBoundingClientRect().height) || BOX_H}px`;   // start at head height
           node.appendChild(f);
           layer.appendChild(node);
+          floats.add(node);
         } else {
           el.appendChild(f);
         }
-        f.addEventListener('animationend', () => node.remove(), { once: true });
-        setTimeout(() => node.remove(), 2000);
+        const remove = () => { floats.delete(node); node.remove(); };
+        f.addEventListener('animationend', remove, { once: true });
+        setTimeout(remove, 2000);
       }
       return api;
     },
 
     destroy() {
-      [runTimer, poseTimer, emoteTimer, glideTimer].forEach(clearTimeout);
+      clearTimeout(glideTimer);
+      live.delete(api);
+      floats.forEach((n) => n.remove());
+      floats.clear();
       el.remove();
     },
   };
 
-  if (opts.avatarId) api.setAvatar(opts.avatarId);
-  else api.setAvatar(null);
-  if (opts.jersey) api.setJersey(opts.jersey, opts.jerseyDark);
+  if (opts.jersey) rig.setJersey(opts.jersey, opts.jerseyDark);
   if (opts.label) api.setLabel(opts.label);
+  live.add(api);
+  wakeLoop();
   return api;
 }
 
 /**
- * Which way a character should face for a movement of (dx, dy) on screen:
+ * Which named view a movement of (dx, dy) on screen is closest to:
  *   down the screen → 'front' (walking toward the camera)
  *   up the screen   → 'away'  (back of the head)
- *   sideways        → 'left' / 'right' (side-on stride)
- * The four views each cover a 90° sector. HYSTERESIS: the current view is kept
- * until the new direction is clearly (≈10°) inside another sector, so a walker
- * near a sector edge does not flicker between views.
+ *   sideways        → 'left' / 'right'
+ * HYSTERESIS: the current view is kept until the new direction is clearly (≈10°)
+ * inside another sector. (The v2 rig turns to any angle by itself; this is kept
+ * for game logic that wants a coarse direction.)
  */
 const VIEW_DIRS = { front: [0, 1], away: [0, -1], left: [-1, 0], right: [1, 0] };
-const VIEW_STICKINESS = 0.25;   // in dot-product units ≈ 10° past the 45° sector edge
+const VIEW_STICKINESS = 0.25;
 export function viewForMotion(dx, dy, current = null) {
   const len = Math.hypot(dx, dy);
   if (!len) return current || 'front';
@@ -442,8 +668,8 @@ export function viewForMotion(dx, dy, current = null) {
 /**
  * Positions on an ellipse for a group walking in a circle (e.g. around chairs).
  * Returns { x, y, facing } for point i of n at `phase` radians (clockwise on
- * screen). Pass the character's current view as `prev` so the hysteresis in
- * viewForMotion keeps it steady.
+ * screen). Move the characters there with moveTo() and facing 'auto': they turn
+ * smoothly along the circle. `facing` is the coarse view, for game logic.
  */
 export function orbitPoint(i, n, phase, { cx = 50, cy = 50, rx = 40, ry = 40, prev = null } = {}) {
   const a = phase + (i * Math.PI * 2) / Math.max(1, n) - Math.PI / 2;
