@@ -169,7 +169,10 @@ const ORBIT = Object.freeze({ cx: 50, cy: 55, rx: 40, ry: 35 });
 /** Feet of a seated player relative to the chair centre: on the front of the seat. */
 const SEAT_DROP = 4;       // % down from the chair centre
 const GATHER_MS = 700;     // stand up and walk back to the circle at the start of a round
-const SIT_GLIDE_MS = 320;  // run to a chair
+/** Run to a chair: % of the stage per second, and the shortest / longest run. */
+const SIT_RUN_PCT_PER_S = 30;
+const SIT_RUN_MIN_MS = 450;
+const SIT_RUN_MAX_MS = 1200;
 const WALK_GAIT_MS = 440;  // stride while circling (a walk; dragging and racing to chairs runs)
 const spinMs = () => (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 40000 : 14000);
 
@@ -317,9 +320,14 @@ function sitOn(entry, chairIndex, { optimistic = false } = {}) {
   clearTimeout(entry.sitTimer);
   entry.seat = chairIndex;
   entry.optimistic = optimistic;
-  entry.ch.setPose(null).moveTo(p.x, p.y, { glide: SIT_GLIDE_MS });
+  // Run there at a steady, readable pace (the time grows with the distance), so the
+  // stride, the arrival and the sit can all be seen. Linear: the legs match the slide.
+  const from = entry.ch.position || p;
+  const dist = Math.hypot(p.x - from.x, p.y - from.y);
+  const ms = Math.round(Math.max(SIT_RUN_MIN_MS, Math.min(SIT_RUN_MAX_MS, (dist / SIT_RUN_PCT_PER_S) * 1000)));
+  entry.ch.setPose(null).moveTo(p.x, p.y, { glide: ms, ease: 'linear' });
   // Sit once they arrive, facing the camera.
-  entry.sitTimer = setTimeout(() => entry.ch.setFacing('front').setPose('sit').setFacing('auto'), SIT_GLIDE_MS);
+  entry.sitTimer = setTimeout(() => entry.ch.setFacing('front').setPose('sit').setFacing('auto'), ms);
 }
 function standUp(entry, { returnHome = false } = {}) {
   clearTimeout(entry.sitTimer);

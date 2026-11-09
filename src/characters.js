@@ -29,7 +29,10 @@
  * is not on screen is skipped.
  */
 import { avatarInfo } from './avatars.js';
-import { createRig25d, GAIT_SPEEDS } from './rig25d.js';
+import { createRig25d, GAIT_SPEEDS, BALL_RADIUS } from './rig25d.js';
+
+/** Radius of a held ball in box px at --chr-scale 1; draw field balls this size × scale. */
+export { BALL_RADIUS };
 
 export const CHARACTER_RIG_VERSION = '2.0.0';
 /** A move longer than this (in %) with no glide is a teleport: no run, no turn. */
@@ -574,6 +577,17 @@ export function createCharacter(opts = {}) {
         hat.hidden = !item;
         hatAt.x = NaN;
       }
+      wake();
+      return api;
+    },
+
+    /**
+     * Carried in both hands in front of the body (e.g. a stone), or null. Sizes in rig
+     * units (≈ px at --chr-scale 1): { w, d?, t, top: [c1, c2], side: [c1, c2] }. The
+     * arms take a carry pose while the legs keep walking / running.
+     */
+    setCarryItem(item) {
+      rig.setCarryItem(item || null);
       wake();
       return api;
     },

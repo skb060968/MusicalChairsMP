@@ -47,6 +47,8 @@ const DIM = Object.freeze({
   thighW: 5.6, shinW: 4.4, shoeW: 3.2, upperW: 3.7, foreW: 3.2,
 });
 const H_STAND = DIM.thigh + DIM.shin + DIM.ankleH + DIM.hipDrop;
+/** Radius of a ball held in the hand (rig units). Games should draw their field ball this size too. */
+export const BALL_RADIUS = 3.2;
 export const RIG_HEIGHT = Math.round(H_STAND + DIM.torso + DIM.neckHead + DIM.headRy + 1.5);
 
 /* ======================= SMALL MATH ======================= */
@@ -451,6 +453,14 @@ const HOLDS = {
   },
 };
 export const HOLD_NAMES = Object.freeze(Object.keys(HOLDS));
+
+/* Carrying something in both hands (setCarryItem): arms only, so the legs keep
+   walking / running underneath. Forearms point forward, hands at belly height. */
+const ARM_PARAMS = ['shL', 'shAbdL', 'elbL', 'aimL', 'armYawL', 'shR', 'shAbdR', 'elbR', 'aimR', 'armYawR'];
+const CARRY_ARMS = Object.freeze({
+  shL: 24, shAbdL: 7, elbL: 74, aimL: 0, armYawL: 0,
+  shR: 24, shAbdR: 7, elbR: 74, aimR: 0, armYawR: 0,
+});
 const HOLD_BLEND_S = 0.28;
 const GAIT_ORDER = ['walk', 'jog', 'run', 'sprint'];
 
@@ -662,6 +672,7 @@ function dot(ctx, a, r) {
   ctx.fill();
 }
 const mix2 = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+const mix3 = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
 
 /* ======================= THE RIG ======================= */
 
@@ -694,6 +705,8 @@ class Rig25d {
     this.shadow = true;               // draw the ground shadow (off when the host draws its own)
     this.handItem = null;
     this.headItem = null;
+    this.carryItem = null;
+    this.carryW = 0;
     /** Last drawn positions (same px space as draw()): throwing hand, top of the head. */
     this.hand = { x: 0, y: 0 };
     this.headTop = { x: 0, y: 0 };
@@ -792,13 +805,24 @@ class Rig25d {
   /** True when nothing is changing except the slow idle loop (the host may draw less often). */
   isSettled() {
     return !this.action && !this.fade && this.speed === 0 && this.speedNow < 0.2
-      && (this.holdW === 0 || this.holdW === 1) && Math.abs(angDiff(this.targetYaw, this.yaw)) < 0.5;
+      && (this.holdW === 0 || this.holdW === 1) && (this.carryW === 0 || this.carryW === 1)
+      && Math.abs(angDiff(this.targetYaw, this.yaw)) < 0.5;
   }
 
   /** 'ball' or null (right hand). */
   setHandItem(item) { this.handItem = item || null; return this; }
   /** 'stone' or null (balanced on the head). */
   setHeadItem(item) { this.headItem = item || null; return this; }
+
+  /**
+   * A slab carried in both hands in front of the body, or null. Sizes in rig units:
+   * { w (width), d (depth, default 0.75 w), t (thickness), top: [c1, c2], side: [c1, c2] }.
+   * The arms take the carry pose; the legs keep moving.
+   */
+  setCarryItem(item) {
+    this.carryItem = item && Number(item.w) > 0 ? { d: item.w * 0.75, t: 3, ...item } : null;
+    return this;
+  }
 
   /**
    * Jump straight to one moment, without blending (previews / pose sheets):
@@ -814,6 +838,7 @@ class Rig25d {
     this.actionName = null;
     this.yaw = this.targetYaw;
     this.holdW = this.holdName ? 1 : 0;
+    this.carryW = this.carryItem ? 1 : 0;
     const c = action ? ACTIONS[action] : null;
     if (c && c !== IDLE) {
       this.action = c;
@@ -861,8 +886,18 @@ class Rig25d {
       loco = blendPose(S.loco, S.idle, gait, wMove);
     }
 
-    // Held pose (sit / aim / crouch) blended over the locomotion.
+    // Carrying: the arms blend into the carry pose (loco is scratch, safe to edit).
     const hs = dt / HOLD_BLEND_S;
+    this.carryW = this.carryItem ? Math.min(1, this.carryW + hs) : Math.max(0, this.carryW - hs);
+    if (this.carryW > 0) {
+      const w = smooth(this.carryW);
+      for (let i = 0; i < ARM_PARAMS.length; i += 1) {
+        const p = ARM_PARAMS[i];
+        loco[p] = LINEAR.has(p) ? lerp(loco[p], CARRY_ARMS[p], w) : lerpAng(loco[p], CARRY_ARMS[p], w);
+      }
+    }
+
+    // Held pose (sit / aim / crouch) blended over the locomotion.
     this.holdW = this.holdName ? Math.min(1, this.holdW + hs) : Math.max(0, this.holdW - hs);
     let base = loco;
     if (this.holdW > 0 && this.holdPose) base = blendPose(S.base, loco, this.holdPose, smooth(this.holdW));
@@ -989,15 +1024,69 @@ class Rig25d {
       { kind: 'arm', a: arms[1], d: arms[1].d + 0.01 },
       { kind: 'head', d: head[2] + 2.5 },
     ];
+    // Carried slab: between the hands, resting on them. Hidden while a whole-body
+    // action (e.g. the pick-up squat) moves the hands elsewhere.
+    const carry = this.carryItem;
+    let slab = null;
+    if (carry && this.carryW > 0.6 && !(this.action && this.actMask !== 'upper')) {
+      const c = add(mix3(j.arms[0].H, j.arms[1].H, 0.5), [0, 1.4, -1.2]);   // hands at its sides
+      slab = { c, d: proj(c)[2] + 0.6 };
+      items.push({ kind: 'carry', d: slab.d });
+    }
     items.sort((a, b) => a.d - b.d);
     items.forEach((it) => {
       if (it.kind === 'torso') this._drawTorso(ctx, pP, pC, th, k, ow, proj);
       else if (it.kind === 'arm') this._drawArm(ctx, it.a, it.a.d < torsoD - 1.2, k, ow, proj);
+      else if (it.kind === 'carry') this._drawSlab(ctx, slab.c, carry, k, proj);
       else this._drawHead(ctx, head, pP, pC, th, k);
     });
 
     ctx.restore();
     return this;
+  }
+
+  /** A flat slab (carried stone) centred at c, turning with the shoulders. */
+  _drawSlab(ctx, c, item, k, proj) {
+    const N = 18;
+    const pts = [];
+    for (let i = 0; i < N; i += 1) {
+      const a = (i / N) * Math.PI * 2;
+      pts.push(proj(add(c, yawV([Math.cos(a) * item.w * 0.5, 0, Math.sin(a) * item.d * 0.5], this.j.y2))));
+    }
+    const trace = (dy) => {
+      ctx.beginPath();
+      ctx.moveTo(pts[0][0], pts[0][1] + dy);
+      for (let i = 1; i < N; i += 1) ctx.lineTo(pts[i][0], pts[i][1] + dy);
+      ctx.closePath();
+    };
+    const thick = item.t * COSP * k;
+    const top = item.top || ['#a99c86', '#7d715d'];
+    const side = item.side || ['#585042', '#39332a'];
+    // Outline, then the side band (the top outline extruded downward), then the top face.
+    ctx.fillStyle = this.col.outline;
+    for (let s = 0; s <= 2; s += 1) { trace(thick * (s / 2) + 0.9); ctx.fill(); }
+    trace(-0.9);
+    ctx.fill();
+    const steps = Math.max(1, Math.ceil(thick));
+    for (let s = steps; s >= 1; s -= 1) {
+      ctx.fillStyle = s === steps ? side[1] : side[0];
+      trace((thick * s) / steps);
+      ctx.fill();
+    }
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    pts.forEach(([px, py]) => { minX = Math.min(minX, px); maxX = Math.max(maxX, px); minY = Math.min(minY, py); maxY = Math.max(maxY, py); });
+    const g = ctx.createLinearGradient(minX, minY, maxX, maxY);
+    g.addColorStop(0, top[0]);
+    g.addColorStop(1, top[1]);
+    ctx.fillStyle = g;
+    trace(0);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)';
+    ctx.lineWidth = Math.max(0.6, 0.5 * k);
+    ctx.stroke();
   }
 
   _drawTorso(ctx, pP, pC, th, k, ow, proj) {
@@ -1101,13 +1190,14 @@ class Rig25d {
       this.hand.x = h[0];
       this.hand.y = h[1];
       if (this.handItem === 'ball') {
+        // Same size as the ball on the field (BALL_RADIUS: hand-sized, a tennis ball).
         const b = proj(addS(arm.A.H, arm.A.fd, 1.3));
         ctx.fillStyle = col.outline;
-        dot(ctx, b, 2.2 * k + ow / 3);
+        dot(ctx, b, BALL_RADIUS * k + ow / 3);
         ctx.fillStyle = '#d32f2f';
-        dot(ctx, b, 2.2 * k);
+        dot(ctx, b, BALL_RADIUS * k);
         ctx.fillStyle = 'rgba(255, 255, 255, 0.55)';
-        dot(ctx, [b[0] - 0.7 * k, b[1] - 0.7 * k], 0.7 * k);
+        dot(ctx, [b[0] - 0.33 * BALL_RADIUS * k, b[1] - 0.33 * BALL_RADIUS * k], 0.32 * BALL_RADIUS * k);
       }
     }
   }
