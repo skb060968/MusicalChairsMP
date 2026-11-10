@@ -23,6 +23,9 @@
  *   order     ['player_0', …] seats dealt in at Start (connected players only)
  *   active    { player_N: true }   still in the game
  *   claims    { player_N: chairIndex }  this round's chairs (absent while music plays)
+ *   runs      { player_N: { chair, x, y, at } }  who is racing to which chair: start
+ *             point (stage %) and server time of the tap; every device animates it
+ *   (written by each player while claiming, cleared by stop / next)
  *   out       { player_N: round }  who was eliminated, and when
  *   winnerKey 'player_N' once finished
  *   operation { type, ownerUid, actorKey, roundId, revision, timestamp }
@@ -199,6 +202,7 @@ export function stopMusic(game, actorKey, ownerUid, timestamp = Date.now()) {
     operation: operation('stop', ownerUid, actorKey, game.roundId, revision, timestamp),
   };
   delete next.claims;
+  delete next.runs;
   return next;
 }
 
@@ -268,6 +272,7 @@ export function nextRound(game, actorKey, ownerUid, timestamp = Date.now(), rand
     operation: operation('next', ownerUid, actorKey, game.roundId, revision, timestamp),
   };
   delete next.claims;
+  delete next.runs;
   return next;
 }
 

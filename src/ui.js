@@ -179,7 +179,8 @@ const GATHER_MS = 700;     // stand up and walk back to the circle at the start 
 const SIT_RUN_MIN_MS = 450;
 const SIT_RUN_MAX_MS = 1500;
 const WALK_GAIT_MS = 440;  // stride while circling (a walk; racing to a chair runs)
-const spinMs = () => (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 40000 : 14000);
+/** One lap of the circle. The same on every device, so everyone sees the same spots. */
+const SPIN_MS = 14000;
 
 /* ============================ STAGE ============================ */
 let selfSlot = null;
@@ -190,6 +191,11 @@ let stageSig = '';           // structural signature the stage was built for
 let run = null;              // local player's race: { chair, pos:{x,y}, to:{x,y}, lastTs, raf }
 let canAct = false;          // the local player may pick a chair right now
 let onTakenHandler = null;   // the chair we were running to was taken first
+let onRunHandler = null;     // ({chair, x, y}) tell the other devices we set off
+let clockNow = () => Date.now();   // server clock (main.js passes serverNow)
+/** Other players' races, animated from game.runs: key → { sig, from, to, at, stopped } */
+const remoteRuns = new Map();
+let remoteRaf = 0;
 let stageWired = false;
 
 /**
@@ -203,7 +209,27 @@ let stageWired = false;
 const actors = new Map();
 const emoted = new Set();    // `${slot}:${roundId}:${round}:${phase}:${status}` already played
 
-const orbit = { raf: 0, gatherTimer: 0, phase: 0, last: 0, running: false };
+const orbit = { raf: 0, gatherTimer: 0, running: false, frozen: false, placedSig: '' };
+
+/*
+ * The walk is a function of the SERVER clock: the circle turns from phaseAt (+ the
+ * gather) until the music deadline, then stops. Every device therefore freezes the
+ * players at the same spots, so a race drawn from one device's start point looks
+ * right on all of them.
+ */
+const TAU = Math.PI * 2;
+const roundBasePhase = (game) => ((Number(game?.round) || 1) * 1.7) % TAU;
+/** Music phase only (phaseAt = when the music started). */
+function walkPhase(game, at) {
+  const start = Number(game?.phaseAt);
+  const music = Number(game?.musicMs) || 10000;
+  if (!Number.isFinite(start) || start <= 0) return roundBasePhase(game);
+  const walked = Math.max(0, Math.min(at, start + music) - (start + GATHER_MS));
+  return roundBasePhase(game) + (walked / SPIN_MS) * TAU;
+}
+/** Where the walk ends: after the whole music (works in any phase, phaseAt not needed). */
+const frozenPhase = (game) => roundBasePhase(game)
+  + (Math.max(0, (Number(game?.musicMs) || 10000) - GATHER_MS) / SPIN_MS) * TAU;
 
 function chairPositions(n) {
   if (n === 1) return [{ left: 50, top: 50 }];   // the final chair sits dead centre
@@ -251,7 +277,8 @@ function buildStage(game, players) {
       ch.el.classList.add('mc-actor');
       ch.el.dataset.slot = key;
       floor.appendChild(ch.el);
-      const start = orbitPoint(i, keys.length, orbit.phase, ORBIT);
+      const start = orbitPoint(i, keys.length,
+        game.phase === PHASES.MUSIC ? walkPhase(game, clockNow()) : frozenPhase(game), ORBIT);
       ch.moveTo(start.x, start.y, { animate: false });
       ch.setFacing(start.facing);
       entry = { ch, seat: null, home: { x: start.x, y: start.y }, optimistic: false, sitTimer: 0 };
@@ -266,7 +293,12 @@ function buildStage(game, players) {
 function startOrbit() {
   if (orbit.running) return;
   orbit.running = true;
-  const keys = roundKeys(currentGame);
+  orbit.frozen = false;
+  orbit.placedSig = '';
+  const game = currentGame;
+  const keys = roundKeys(game);
+  const now0 = clockNow();
+  const gatherLeft = Math.max(0, Math.min(GATHER_MS, Number(game.phaseAt) + GATHER_MS - now0)) || 0;
   // Everyone stands up and walks back to their place on the circle…
   keys.forEach((key, i) => {
     const entry = actors.get(key);
@@ -275,48 +307,66 @@ function startOrbit() {
     entry.seat = null;
     entry.optimistic = false;
     entry.ch.setPose(null).setFacing('auto').setGait(300);
-    const p = orbitPoint(i, keys.length, orbit.phase, ORBIT);
-    entry.ch.moveTo(p.x, p.y, { glide: GATHER_MS });
+    const p = orbitPoint(i, keys.length, walkPhase(game, now0 + gatherLeft), ORBIT);
+    entry.ch.moveTo(p.x, p.y, { glide: Math.max(250, gatherLeft) });
   });
-  // …then they all set off round the chairs together.
+  // …then they all set off round the chairs together (on the server clock).
   orbit.gatherTimer = setTimeout(() => {
     orbit.gatherTimer = 0;
     if (!orbit.running) return;
     actors.forEach(({ ch }) => ch.setGait(WALK_GAIT_MS).setRunning(true));
-    orbit.last = performance.now();
-    const frame = (ts) => {
-      if (!orbit.running) return;
-      const dt = Math.min(100, ts - orbit.last);
-      orbit.last = ts;
-      orbit.phase += (dt / spinMs()) * Math.PI * 2;
-      const ks = roundKeys(currentGame);
+    const frame = () => {
+      if (!orbit.running || !currentGame) return;
+      const g = currentGame;
+      const t = clockNow();
+      const ks = roundKeys(g);
+      const phase = walkPhase(g, t);
       ks.forEach((key, i) => {
         const entry = actors.get(key);
         if (!entry) return;
         // Facing 'auto': each walker turns smoothly along the circle (characters.js).
-        const p = orbitPoint(i, ks.length, orbit.phase, ORBIT);
+        const p = orbitPoint(i, ks.length, phase, ORBIT);
         entry.ch.moveTo(p.x, p.y);
       });
+      // The music deadline: everybody stops on the same spot on every device, even
+      // before the "stop" write arrives here.
+      if (Number.isFinite(Number(g.phaseAt)) && t >= Number(g.phaseAt) + (Number(g.musicMs) || 0)) {
+        orbit.frozen = true;
+        actors.forEach(({ ch }) => ch.setRunning(false));
+        return;
+      }
       orbit.raf = requestAnimationFrame(frame);
     };
     orbit.raf = requestAnimationFrame(frame);
-  }, GATHER_MS);
+  }, Math.max(250, gatherLeft));
 }
 
-/** Music stopped: everyone freezes where they are, turned toward the chairs. */
+/**
+ * Music stopped: everyone stands on their final spot (the same on every device),
+ * turned toward the chairs. Also places late joiners. Once per round.
+ */
 function stopOrbit() {
-  if (!orbit.running) return;
-  orbit.running = false;
-  cancelAnimationFrame(orbit.raf);
-  clearTimeout(orbit.gatherTimer);
-  orbit.gatherTimer = 0;
-  actors.forEach((entry) => {
+  const game = currentGame;
+  if (orbit.running) {
+    orbit.running = false;
+    cancelAnimationFrame(orbit.raf);
+    clearTimeout(orbit.gatherTimer);
+    orbit.gatherTimer = 0;
+  }
+  if (!game) return;
+  const sig = `${game.roundId}:${game.round}`;
+  if (orbit.placedSig === sig) return;
+  orbit.placedSig = sig;
+  const keys = roundKeys(game);
+  const phase = frozenPhase(game);
+  keys.forEach((key, i) => {
+    const entry = actors.get(key);
+    if (!entry) return;
     entry.ch.setRunning(false).setGait(300).setFacing('auto');
-    const p = entry.ch.position;
-    if (p) {
-      entry.home = p;
-      entry.ch.faceToward(50 - p.x, 50 - p.y);         // turn in toward the chairs
-    }
+    const p = orbitPoint(i, keys.length, phase, ORBIT);
+    if (entry.seat === null && !(key === selfSlot && run)) entry.ch.moveTo(p.x, p.y, { glide: 160, animate: false });
+    entry.home = { x: p.x, y: p.y };
+    entry.ch.faceToward(50 - p.x, 50 - p.y);           // turn in toward the chairs
   });
 }
 
@@ -331,6 +381,11 @@ function sitOn(entry, chairIndex, { optimistic = false } = {}) {
   // stride, the arrival and the sit can all be seen. Linear: the legs match the slide.
   const from = entry.ch.position || p;
   const dist = Math.hypot(p.x - from.x, p.y - from.y);
+  if (dist < 1.5) {                       // already at the chair (their live race got here)
+    entry.ch.moveTo(p.x, p.y, { animate: false });
+    entry.ch.setFacing('front').setPose('sit').setFacing('auto');
+    return;
+  }
   const ms = Math.round(Math.max(SIT_RUN_MIN_MS, Math.min(SIT_RUN_MAX_MS, (dist / RACE_RUN_PCT_PER_S) * 1000)));
   entry.ch.setPose(null).moveTo(p.x, p.y, { glide: ms, ease: 'linear' });
   // Sit once they arrive, facing the camera.
@@ -367,6 +422,7 @@ function syncStage(game, players) {
     stopRun();
     if (taken) onTakenHandler?.();
   }
+  syncRemoteRuns(game);
 
   stage.querySelectorAll('.mc-chair').forEach((chair) => {
     const owner = chairOwner(game, Number(chair.dataset.chair));
@@ -473,7 +529,62 @@ function startRun(i) {
   run = { chair: i, pos: { ...from }, to, lastTs: performance.now(), raf: 0 };
   setTarget(i);
   run.raf = requestAnimationFrame(runStep);
+  onRunHandler?.({ chair: i, x: from.x, y: from.y });     // everyone else sees us set off
   return true;
+}
+
+/* ---- other players' races (game.runs), drawn live on this device ---- */
+function syncRemoteRuns(game) {
+  const runs = game.phase === PHASES.CLAIMING ? (game.runs || {}) : {};
+  const claims = game.claims || {};
+  // Forget races that are over: the player sat down, or the round moved on.
+  [...remoteRuns.keys()].forEach((key) => {
+    if (!runs[key] || Number.isInteger(claims[key])) remoteRuns.delete(key);
+  });
+  Object.entries(runs).forEach(([key, r]) => {
+    if (key === selfSlot || !r || Number.isInteger(claims[key])) return;
+    if (!actors.has(key) || !Number.isInteger(r.chair) || !Number.isFinite(r.at)) return;
+    const sig = `${r.chair}:${r.x}:${r.y}:${r.at}`;
+    const cur = remoteRuns.get(key);
+    if (cur && cur.sig === sig) {
+      // Their chair was taken by someone else: they stop where they are.
+      if (!cur.stopped && chairOwner(game, r.chair) !== null) cur.stopped = true;
+      return;
+    }
+    const to = seatPoint(r.chair);
+    if (!to) return;
+    actors.get(key).ch.setPose(null).setFacing('auto').setGait(260);
+    remoteRuns.set(key, {
+      sig, chair: r.chair, from: { x: r.x, y: r.y }, to, at: r.at,
+      stopped: chairOwner(game, r.chair) !== null,
+    });
+  });
+  if (remoteRuns.size && !remoteRaf) remoteRaf = requestAnimationFrame(remoteStep);
+}
+/** Position of a remote runner now: from the tap's start point, at race speed. */
+function remotePos(rr, t) {
+  const dx = rr.to.x - rr.from.x;
+  const dy = rr.to.y - rr.from.y;
+  const d = Math.hypot(dx, dy) || 1;
+  const run = Math.min(d, (RACE_RUN_PCT_PER_S * Math.max(0, t - rr.at)) / 1000);
+  return { x: rr.from.x + (dx / d) * run, y: rr.from.y + (dy / d) * run, done: run >= d };
+}
+function remoteStep() {
+  remoteRaf = 0;
+  const t = clockNow();
+  remoteRuns.forEach((rr, key) => {
+    const entry = actors.get(key);
+    if (!entry) { remoteRuns.delete(key); return; }
+    if (rr.stopped) {
+      if (!rr.parked) { rr.parked = true; entry.ch.setRunning(false); entry.home = entry.ch.position || entry.home; }
+      return;
+    }
+    const p = remotePos(rr, t);
+    entry.ch.moveTo(p.x, p.y);
+    if (p.done) rr.parked = true;          // waits by the chair until the claim lands
+  });
+  const moving = [...remoteRuns.values()].some((rr) => !rr.parked);
+  if (moving) remoteRaf = requestAnimationFrame(remoteStep);
 }
 function wireStage() {
   const stage = el('mc-stage');
@@ -542,7 +653,6 @@ export function resetStage() {
   orbit.running = false;
   cancelAnimationFrame(orbit.raf);
   clearTimeout(orbit.gatherTimer);
-  orbit.phase = 0;
   actors.forEach(({ ch, sitTimer }) => { clearTimeout(sitTimer); ch.destroy(); });
   actors.clear();
   emoted.clear();
@@ -550,6 +660,10 @@ export function resetStage() {
   if (run) cancelAnimationFrame(run.raf);
   run = null;
   canAct = false;
+  remoteRuns.clear();
+  cancelAnimationFrame(remoteRaf);
+  remoteRaf = 0;
+  orbit.placedSig = '';
   el('mc-chairs')?.replaceChildren();
   el('mc-orbit')?.replaceChildren();
   el('mc-floor')?.replaceChildren();
@@ -564,12 +678,16 @@ export function resetStage() {
  * @param {string} view.localSlot
  * @param {(chair:number)=>void} view.onClaim   our avatar reached chair `chair`: claim it
  * @param {()=>void} [view.onTaken]  the chair we were running to was taken first
+ * @param {({chair,x,y})=>void} [view.onRun]  we set off for a chair (shared with everyone)
+ * @param {()=>number} [view.now]  server clock in ms (positions and races are timed on it)
  */
-export function renderGame({ game, players, localSlot, onClaim, onTaken = null }) {
+export function renderGame({ game, players, localSlot, onClaim, onTaken = null, onRun = null, now = null }) {
   if (!game) return;
   selfSlot = localSlot || null;
   onClaimHandler = onClaim;
   onTakenHandler = onTaken;
+  onRunHandler = onRun;
+  if (typeof now === 'function') clockNow = now;
   currentGame = game;
   currentPlayers = players || {};
   wireStage();

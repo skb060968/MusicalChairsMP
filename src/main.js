@@ -21,7 +21,7 @@ import { showScreen, showToast, confirmModal } from './platform-ui.js';
 import { initDeepLinkHandler, createShareHandler, showQRCode } from './deep-link-handler.js';
 import {
   createRoom, joinRoom, listenRoom, listenPlayers, setupDisconnectHandler, stopPresenceTracking,
-  leavePlayer, removePlayer, deleteRoom, endRoom, resetRoom, startGame, advanceGame, claimChair,
+  leavePlayer, removePlayer, deleteRoom, endRoom, resetRoom, startGame, advanceGame, claimChair, writeRun,
   markSelfOffline, watchReconnect, watchServerClock, serverNow, fetchRoomForRestore,
   PLAYER_AVATARS, MAX_PLAYERS,
 } from './firebase-sync.js';
@@ -522,7 +522,17 @@ function onChairTaken() {
 function renderGameView() {
   if (!currentGame) return;
   renderGame({
-    game: currentGame, players: roomPlayers, localSlot: localSlot(), onClaim: doClaim, onTaken: onChairTaken,
+    game: currentGame, players: roomPlayers, localSlot: localSlot(),
+    onClaim: doClaim, onTaken: onChairTaken, onRun: doRun, now: serverNow,
+  });
+}
+
+/** We set off for a chair: share it so every screen shows the race live. */
+function doRun({ chair, x, y }) {
+  if (!roomCode || playerIndex == null) return;
+  writeRun(roomCode, playerIndex, { chair, x, y }).catch((err) => {
+    // Only the animation on other screens is lost; the claim still decides the chair.
+    console.warn('Run not shared:', err?.message || err);
   });
 }
 

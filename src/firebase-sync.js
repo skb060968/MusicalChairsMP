@@ -338,6 +338,20 @@ export async function claimChair(roomCode, playerIndex, chair) {
   }
 }
 
+/**
+ * THE PLAYER THEMSELVES. "I am running to chair `chair`, starting from (x, y)" — every
+ * device animates the run from this, timed from the server timestamp of the tap.
+ * Purely visual: the chair is still won by claimChair() when the avatar arrives.
+ */
+export async function writeRun(roomCode, playerIndex, { chair, x, y }) {
+  await requireUser();
+  const code = normalizeRoomCode(roomCode);
+  const key = playerKeyFor(playerIndex);
+  if (!PLAYER_KEY_RE.test(key) || !Number.isInteger(chair)) throw new Error('Invalid run');
+  const r1 = (v) => Math.round(Math.max(0, Math.min(100, Number(v) || 0)) * 10) / 10;
+  await set(ref(db, roomPath(code, `game/runs/${key}`)), { chair, x: r1(x), y: r1(y), at: serverTimestamp() });
+}
+
 /* ======================= RESET / LEAVE / END ======================= */
 
 /** Back to the lobby after a finished game. The host, or — when the host is gone —
