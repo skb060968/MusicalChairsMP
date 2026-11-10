@@ -5,11 +5,12 @@
  *     HTML <audio> for the music track (too long to decode into a buffer).
  *  2. STAGE  — a round dance floor: N−1 chairs on an inner ring and one CHARACTER
  *     (shared rig, src/characters.js) per player. While the music plays everyone
- *     walks round the chairs; when it stops they freeze, the local player drags
- *     their avatar onto a free chair (drag only), and seated players sit down. At the
+ *     walks round the chairs; when it stops they freeze, the local player taps one
+ *     free chair and their avatar runs to it — the first to arrive gets it — and
+ *     seated players sit down. At the
  *     reveal the player left standing slumps, and the winner celebrates.
- *     Positions are cosmetic and local; the only thing that leaves the device is
- *     "I claim chair i".
+ *     Positions are local; the only thing that leaves the device is "I claim chair i",
+ *     sent when our avatar reaches it.
  *  3. ROSTER — every seat, with YOU / HOST / OUT / OFFLINE badges and the speaking glow.
  *
  * JS owns POSITION (inline left/top as % of the stage box), CSS owns APPEARANCE.
@@ -162,21 +163,22 @@ function place(node, { left, top }) {
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
 const CHAIR_RADIUS = 24;   // % of the stage
-const HIT_RADIUS = 12;     // % — how close a dragged character's feet must be to a chair
-/** Dragging: the avatar runs toward the finger at this speed (% of the stage per second),
- *  so a near chair is reached in ~0.4 s and one across the floor in ~1.6 s. */
-const DRAG_RUN_PCT_PER_S = 40;
+/**
+ * The race to a chair: every avatar runs at this speed (% of the stage per second)
+ * from where it stood when the music stopped. The nearest chair is ~0.35 s away, one
+ * across the floor ~1.5 s, so the player closest to a chair gets there first.
+ */
+const RACE_RUN_PCT_PER_S = 40;
 /** The walking circle. Characters are drawn ABOVE their feet, so the circle sits a
  *  little low and is slightly flattened — heads stay on the floor at the top. */
 const ORBIT = Object.freeze({ cx: 50, cy: 55, rx: 40, ry: 35 });
 /** Feet of a seated player relative to the chair centre: on the front of the seat. */
 const SEAT_DROP = 4;       // % down from the chair centre
 const GATHER_MS = 700;     // stand up and walk back to the circle at the start of a round
-/** Run to a chair: % of the stage per second, and the shortest / longest run. */
-const SIT_RUN_PCT_PER_S = 30;
+/** Another player's claim landed: they run to it on this screen (shortest / longest run). */
 const SIT_RUN_MIN_MS = 450;
-const SIT_RUN_MAX_MS = 1200;
-const WALK_GAIT_MS = 440;  // stride while circling (a walk; dragging and racing to chairs runs)
+const SIT_RUN_MAX_MS = 1500;
+const WALK_GAIT_MS = 440;  // stride while circling (a walk; racing to a chair runs)
 const spinMs = () => (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 40000 : 14000);
 
 /* ============================ STAGE ============================ */
@@ -185,14 +187,16 @@ let onClaimHandler = null;
 let currentGame = null;
 let currentPlayers = {};
 let stageSig = '';           // structural signature the stage was built for
-let drag = null;             // { key, pointerId, origin:{x,y}, target }
+let run = null;              // local player's race: { chair, pos:{x,y}, to:{x,y}, lastTs, raf }
+let canAct = false;          // the local player may pick a chair right now
+let onTakenHandler = null;   // the chair we were running to was taken first
 let stageWired = false;
 
 /**
  * slot → { ch, seat, home, optimistic, sitTimer }
  *   ch          character handle (src/characters.js)
  *   seat        chair index the character currently sits on (or null)
- *   home        where it stood when the music stopped (drag cancels return here)
+ *   home        where it stood when the music stopped (the race starts here)
  *   optimistic  moved to a chair locally, waiting for the claim to land
  * Kept across rounds of one game so players stand up and walk back to the circle.
  */
@@ -227,7 +231,6 @@ function buildStage(game, players) {
   chairsLayer.replaceChildren(...chairPositions(n).map((pos, i) => {
     const chair = document.createElement('button');
     chair.type = 'button';
-    chair.tabIndex = -1;                 // not tappable / focusable: chairs are claimed by dragging
     chair.className = 'mc-chair';
     chair.dataset.chair = String(i);
     chair.setAttribute('aria-label', `Chair ${i + 1}`);
@@ -328,17 +331,16 @@ function sitOn(entry, chairIndex, { optimistic = false } = {}) {
   // stride, the arrival and the sit can all be seen. Linear: the legs match the slide.
   const from = entry.ch.position || p;
   const dist = Math.hypot(p.x - from.x, p.y - from.y);
-  const ms = Math.round(Math.max(SIT_RUN_MIN_MS, Math.min(SIT_RUN_MAX_MS, (dist / SIT_RUN_PCT_PER_S) * 1000)));
+  const ms = Math.round(Math.max(SIT_RUN_MIN_MS, Math.min(SIT_RUN_MAX_MS, (dist / RACE_RUN_PCT_PER_S) * 1000)));
   entry.ch.setPose(null).moveTo(p.x, p.y, { glide: ms, ease: 'linear' });
   // Sit once they arrive, facing the camera.
   entry.sitTimer = setTimeout(() => entry.ch.setFacing('front').setPose('sit').setFacing('auto'), ms);
 }
-function standUp(entry, { returnHome = false } = {}) {
+function standUp(entry) {
   clearTimeout(entry.sitTimer);
   entry.seat = null;
   entry.optimistic = false;
   entry.ch.setPose(null);
-  if (returnHome && entry.home) entry.ch.moveTo(entry.home.x, entry.home.y, { glide: 300 });
 }
 
 /** Sync chairs + characters to the claims, flags and phase. Idempotent. */
@@ -357,6 +359,14 @@ function syncStage(game, players) {
   stage.classList.toggle('claiming', phase === PHASES.CLAIMING);
   stage.classList.toggle('reveal', revealing);
   stage.classList.toggle('can-act', iCanAct);
+  canAct = iCanAct;
+
+  // The chair we are running to was taken first, or the window closed: stop where we are.
+  if (run && (phase !== PHASES.CLAIMING || chairOwner(game, run.chair) !== null)) {
+    const taken = phase === PHASES.CLAIMING;
+    stopRun();
+    if (taken) onTakenHandler?.();
+  }
 
   stage.querySelectorAll('.mc-chair').forEach((chair) => {
     const owner = chairOwner(game, Number(chair.dataset.chair));
@@ -372,7 +382,7 @@ function syncStage(game, players) {
     const { ch } = entry;
     const seat = claims[key];
     const seated = Number.isInteger(seat) && seat < chairs;
-    const dragging = drag?.key === key;
+    const running = key === me && run !== null;
     const eliminated = revealing && game.out?.[key] === game.round;
 
     ch.setFlags({
@@ -380,10 +390,11 @@ function syncStage(game, players) {
       offline: players[key]?.connected === false,
       faded: eliminated,
     });
-    ch.el.classList.toggle('draggable', iCanAct && key === me);
+    // "Pick a chair!": your avatar hops while it is your turn and you have not picked yet.
+    ch.el.classList.toggle('ready', iCanAct && key === me && !running && entry.seat === null);
     ch.el.classList.toggle('seated', seated);
 
-    if (phase !== PHASES.MUSIC && !dragging) {
+    if (phase !== PHASES.MUSIC && !running) {
         if (seated && entry.seat === seat) entry.optimistic = false;      // our claim was confirmed
       if (seated && entry.seat !== seat) sitOn(entry, seat);            // a claim landed
       else if (!seated && entry.seat !== null && !entry.optimistic) standUp(entry);
@@ -398,107 +409,82 @@ function syncStage(game, players) {
   });
 }
 
-/* ---- drag to claim ---- */
-function stagePoint(clientX, clientY) {
-  const box = el('mc-stage').getBoundingClientRect();
-  return { left: ((clientX - box.left) / box.width) * 100, top: ((clientY - box.top) / box.height) * 100 };
-}
-function nearestFreeChair(pt) {
-  if (!currentGame) return null;
-  const positions = chairPositions(roundChairCount(currentGame));
-  let best = null;
-  positions.forEach((pos, i) => {
-    if (chairOwner(currentGame, i) !== null) return;
-    const d = Math.hypot(pos.left - pt.left, pos.top + SEAT_DROP - pt.top);
-    if (d <= HIT_RADIUS && (!best || d < best.d)) best = { i, d };
-  });
-  return best ? best.i : null;
-}
+/* ---- the race to a chair ----
+ * When the music stops the local player taps ONE free chair. Their avatar then runs
+ * to it at RACE_RUN_PCT_PER_S from where it stood, and the claim is sent only when it
+ * ARRIVES. The first claim to reach the server wins (the rules refuse later ones), so
+ * a nearer player gets there first. Taps during the music, during a run, or after
+ * sitting do nothing; a player whose chair is taken first stops and may pick another.
+ */
 function setTarget(i) {
   el('mc-chairs')?.querySelectorAll('.mc-chair').forEach((c) => c.classList.toggle('target', Number(c.dataset.chair) === i));
-  if (drag) drag.target = i;
 }
-function tryClaim(chair) {
-  if (!currentGame || selfSlot == null) return false;
-  if (!canClaim(currentGame, selfSlot, chair)) return false;
-  onClaimHandler?.(chair);
-  return true;
-}
-/**
- * While dragging, the avatar RUNS toward the finger at a capped speed instead of
- * jumping to it, so a chair far from where you stood when the music stopped takes
- * longer to reach than a near one. The drop target is the chair under the avatar's
- * feet, not under the finger.
- */
-function dragStep(ts) {
-  if (!drag) return;
-  const dt = Math.min(0.05, Math.max(0, (ts - drag.lastTs) / 1000));
-  drag.lastTs = ts;
-  const entry = actors.get(drag.key);
-  if (entry) {
-    const dx = drag.finger.x - drag.pos.x;
-    const dy = drag.finger.y - drag.pos.y;
-    const d = Math.hypot(dx, dy);
-    const step = DRAG_RUN_PCT_PER_S * dt;
-    if (d > 0.05) {
-      const k = Math.min(1, step / d);
-      drag.pos = { x: drag.pos.x + dx * k, y: drag.pos.y + dy * k };
-      entry.ch.moveTo(drag.pos.x, drag.pos.y);
-    }
-    setTarget(nearestFreeChair({ left: drag.pos.x, top: drag.pos.y }));
-  }
-  drag.raf = requestAnimationFrame(dragStep);
-}
-function endDrag(claimed) {
-  if (!drag) return;
-  const { key, origin, target } = drag;
-  cancelAnimationFrame(drag.raf);
-  drag = null;
+function stopRun() {
+  if (!run) return;
+  cancelAnimationFrame(run.raf);
+  run = null;
   setTarget(null);
-  const entry = actors.get(key);
-  if (!entry) return;
-  entry.ch.el.classList.remove('dragging');
-  entry.ch.setGait(300);
-  if (claimed && target != null) sitOn(entry, target, { optimistic: true });
-  else entry.ch.moveTo(origin.x, origin.y, { glide: 280 });
+  const entry = actors.get(selfSlot);
+  if (entry) {
+    entry.ch.setRunning(false);
+    const p = entry.ch.position;
+    if (p) entry.home = p;                       // a new pick starts from here
+  }
+}
+function runStep(ts) {
+  if (!run) return;
+  const dt = Math.min(0.05, Math.max(0, (ts - run.lastTs) / 1000));
+  run.lastTs = ts;
+  const entry = actors.get(selfSlot);
+  if (!entry) { stopRun(); return; }
+  const dx = run.to.x - run.pos.x;
+  const dy = run.to.y - run.pos.y;
+  const d = Math.hypot(dx, dy);
+  const step = RACE_RUN_PCT_PER_S * dt;
+  if (d <= step) {
+    // Arrived: claim it, and sit (the rules may still refuse it if someone was faster).
+    const { chair } = run;
+    entry.ch.moveTo(run.to.x, run.to.y);
+    stopRun();
+    if (currentGame && canClaim(currentGame, selfSlot, chair)) {
+      clearTimeout(entry.sitTimer);
+      entry.seat = chair;
+      entry.optimistic = true;
+      entry.ch.setFacing('front').setPose('sit').setFacing('auto');
+      onClaimHandler?.(chair);
+    } else {
+      onTakenHandler?.();
+    }
+    return;
+  }
+  run.pos = { x: run.pos.x + (dx / d) * step, y: run.pos.y + (dy / d) * step };
+  entry.ch.moveTo(run.pos.x, run.pos.y);       // the gait and facing follow the real speed
+  run.raf = requestAnimationFrame(runStep);
+}
+/** The local player picked chair `i`: run there. Returns false if the pick is not allowed. */
+function startRun(i) {
+  if (!canAct || run || !currentGame || selfSlot == null) return false;
+  if (!canClaim(currentGame, selfSlot, i)) return false;
+  const entry = actors.get(selfSlot);
+  const to = seatPoint(i);
+  if (!entry || !to || entry.seat !== null) return false;
+  const from = entry.ch.position || entry.home || to;
+  entry.ch.setPose(null).setFacing('auto').setGait(260);
+  run = { chair: i, pos: { ...from }, to, lastTs: performance.now(), raf: 0 };
+  setTarget(i);
+  run.raf = requestAnimationFrame(runStep);
+  return true;
 }
 function wireStage() {
   const stage = el('mc-stage');
   if (!stage || stageWired) return;
   stageWired = true;
-  stage.addEventListener('pointerdown', (e) => {
-    const node = e.target.closest('.mc-actor.draggable');
-    if (!node || drag) return;
-    const entry = actors.get(node.dataset.slot);
-    if (!entry) return;
-    e.preventDefault();
-    const at = entry.ch.position || { x: 50, y: 50 };
-    drag = {
-      key: node.dataset.slot, pointerId: e.pointerId, target: null, origin: at,
-      pos: { ...at }, finger: { ...at }, lastTs: performance.now(), raf: 0,
-    };
-    node.classList.add('dragging');
-    entry.ch.setFacing('auto').setGait(260);
-    try { stage.setPointerCapture(e.pointerId); } catch (_) {}
-    drag.raf = requestAnimationFrame(dragStep);
+  // One tap on a free chair = "run to that chair". Nothing else claims a chair.
+  stage.addEventListener('click', (e) => {
+    const chair = e.target.closest('.mc-chair');
+    if (!chair || chair.disabled) return;
+    startRun(Number(chair.dataset.chair));
   });
-  stage.addEventListener('pointermove', (e) => {
-    if (!drag || e.pointerId !== drag.pointerId) return;
-    const pt = stagePoint(e.clientX, e.clientY);
-    // The finger marks where the FEET should go; the avatar runs there (dragStep).
-    drag.finger = { x: clamp(pt.left, 4, 96), y: clamp(pt.top, 14, 97) };
-  });
-  const finish = (e) => {
-    if (!drag || e.pointerId !== drag.pointerId) return;
-    // Only a chair the avatar has actually reached counts.
-    const target = nearestFreeChair({ left: drag.pos.x, top: drag.pos.y });
-    drag.target = target;
-    endDrag(target != null && tryClaim(target));
-  };
-  stage.addEventListener('pointerup', finish);
-  stage.addEventListener('pointercancel', finish);
-  // Chairs are claimed only by dragging your avatar onto one (tapping a chair does
-  // nothing). The first claim to reach the server wins; the rules refuse the rest.
   window.addEventListener('resize', updateScale);
 }
 
@@ -540,10 +526,16 @@ export function setRoundLabel(text) {
   const node = el('mc-round');
   if (node) node.textContent = String(text ?? '');
 }
-/** The local claim was refused (someone was faster): stand up and walk back. */
+/**
+ * The local claim was refused (someone reached the chair first): stand up where you
+ * are, by that chair; you may pick another chair from here.
+ */
 export function cancelClaimPreview() {
   const entry = actors.get(selfSlot);
-  if (entry?.optimistic) standUp(entry, { returnHome: true });
+  if (!entry?.optimistic) return;
+  standUp(entry);
+  const p = entry.ch.position;
+  if (p) entry.home = p;
 }
 /** Forget the stage between games so the next round is built fresh. */
 export function resetStage() {
@@ -555,7 +547,9 @@ export function resetStage() {
   actors.clear();
   emoted.clear();
   stageSig = '';
-  drag = null;
+  if (run) cancelAnimationFrame(run.raf);
+  run = null;
+  canAct = false;
   el('mc-chairs')?.replaceChildren();
   el('mc-orbit')?.replaceChildren();
   el('mc-floor')?.replaceChildren();
@@ -568,12 +562,14 @@ export function resetStage() {
  * @param {object} view.game      game node
  * @param {object} view.players   room players
  * @param {string} view.localSlot
- * @param {(chair:number)=>void} view.onClaim
+ * @param {(chair:number)=>void} view.onClaim   our avatar reached chair `chair`: claim it
+ * @param {()=>void} [view.onTaken]  the chair we were running to was taken first
  */
-export function renderGame({ game, players, localSlot, onClaim }) {
+export function renderGame({ game, players, localSlot, onClaim, onTaken = null }) {
   if (!game) return;
   selfSlot = localSlot || null;
   onClaimHandler = onClaim;
+  onTakenHandler = onTaken;
   currentGame = game;
   currentPlayers = players || {};
   wireStage();

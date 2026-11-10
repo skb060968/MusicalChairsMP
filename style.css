@@ -341,8 +341,8 @@ body {
   background: url('/images/chair.png') center / contain no-repeat;
   filter: drop-shadow(0 3px 4px rgba(0, 0, 0, 0.5));
 }
-/* Free chairs pulse as drop targets; they are not tappable (claim by dragging). */
-.mc-chair.free { cursor: default; }
+/* Free chairs pulse while you may pick one: one tap and your avatar runs there. */
+.mc-chair.free { cursor: pointer; }
 .mc-chair.free::after {
   content: ''; position: absolute; inset: -14%; border-radius: 50%;
   border: 2px solid rgba(255, 215, 0, 0.55);
@@ -357,11 +357,9 @@ body {
 /* ---- players: shared character rig (src/characters.js styles itself; these are
         only the Musical Chairs extras on top) ---- */
 .mc-floor .mc-actor { pointer-events: none; }
-.mc-floor .mc-actor.draggable { pointer-events: auto; cursor: grab; }
-/* "drag me": the player hops gently while it is your turn to grab a chair
+/* "pick a chair!": your player hops gently while it is your turn to tap a chair
    (.chr-canvas is the drawn body in the 2.5D rig) */
-.mc-floor .mc-actor.draggable:not(.dragging) .chr-canvas { animation: mc-nudge 0.9s ease-in-out infinite; }
-.mc-floor .mc-actor.dragging { cursor: grabbing; --chr-boost: 1.28; }
+.mc-floor .mc-actor.ready .chr-canvas { animation: mc-nudge 0.9s ease-in-out infinite; }
 /* Seated: soft green glow on the ground under the chair */
 .mc-floor .mc-actor.seated .chr-shadow { background: radial-gradient(ellipse, rgba(74, 222, 128, 0.55), rgba(0, 0, 0, 0.3) 70%); width: 38px; }
 @keyframes mc-nudge { 0%, 100% { translate: 0 0; } 50% { translate: 0 -4px; } }

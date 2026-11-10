@@ -1,7 +1,7 @@
 # Musical Chairs
 
-Real-time party elimination for 2–8 players. When the music stops, drag your avatar
-onto a free chair (dragging is the only way; the first to drop on a chair gets it). Left standing? You're out. Last one seated wins.
+Real-time party elimination for 2–8 players. When the music stops, tap one free
+chair and your avatar runs to it from where it stood; the first to arrive gets it. Left standing? You're out. Last one seated wins.
 
 **Peer-run.** There is no host authority once the game starts. Every phase change is a
 function of the shared `game` node and the server clock, so any connected player may
@@ -29,7 +29,7 @@ everyone still standing is offline) ─▶ reveal (3.5 s) ─▶ next round … 
 | `src/engine.js` | Pure rules of the game: state shape, reducers (`stopMusic`, `reveal`, `nextRound`), `dueTransition`, standings |
 | `src/firebase-sync.js` | Room lifecycle, presence, `advanceGame` (transaction), `claimChair`, server clock |
 | `src/main.js` | Screens, lobby, the deadline loop (`scheduleTransition` / `fireTransition`), results |
-| `src/ui.js` | Sound + music, the stage (chairs, walking characters, drag to claim, sitting), roster |
+| `src/ui.js` | Sound + music, the stage (chairs, walking characters, tap a chair and race to it, sitting), roster |
 | `src/avatars.js` | **Shared.** The 8 drawn faces (front + back of head) — ids `m1`–`m4`, `f1`–`f4` |
 | `src/characters.js` | **Shared.** Character rig: face on a body that walks/runs, turns, sits, throws, cheers, sulks. Injects its own `chr-` styles |
 

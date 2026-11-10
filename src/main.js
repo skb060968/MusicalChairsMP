@@ -497,14 +497,14 @@ function showGameScreen() {
   }
 }
 
-/** The local player dragged their avatar onto a chair. Optimistic in the UI; the rules
+/** Our avatar reached the chair the player tapped. Optimistic in the UI; the rules
  *  are the referee — a refusal means someone else got there first. */
 function doClaim(chair) {
   if (!roomCode || playerIndex == null) return;
   claimChair(roomCode, playerIndex, chair).then((ok) => {
     if (ok) { playSound('tap'); return; }
-    showToast('Too slow — that chair was taken!', 1800);
-    cancelClaimPreview();                               // stand up and walk back
+    onChairTaken();
+    cancelClaimPreview();                               // stand up by that chair
     renderGameView();                                   // snap back to the truth
   }).catch((err) => {
     console.error('Claim failed:', err);
@@ -514,9 +514,16 @@ function doClaim(chair) {
   });
 }
 
+/** Someone reached our chair first: we can still try another free chair. */
+function onChairTaken() {
+  showToast('Too slow — that chair was taken! Tap another free chair', 1800);
+}
+
 function renderGameView() {
   if (!currentGame) return;
-  renderGame({ game: currentGame, players: roomPlayers, localSlot: localSlot(), onClaim: doClaim });
+  renderGame({
+    game: currentGame, players: roomPlayers, localSlot: localSlot(), onClaim: doClaim, onTaken: onChairTaken,
+  });
 }
 
 function nameOf(key) { return roomPlayers[key]?.name || 'A player'; }
@@ -546,7 +553,7 @@ function setPlayMessage(game) {
   } else if (game.phase === PHASES.CLAIMING) {
     if (!inGame) setStatus('Music stopped — watching them scramble…');
     else if (seated) setStatus('🪑 You are seated! Waiting for the others…');
-    else setStatus('🛑 Music stopped — drag your avatar onto a free chair!');
+    else setStatus('🛑 Music stopped — tap a free chair and run for it!');
   } else if (game.phase === PHASES.REVEAL) {
     const out = orderKeys(game).filter((k) => game.out?.[k] === game.round);
     if (!out.length) setStatus('Everyone found a chair — again!');
