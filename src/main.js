@@ -501,7 +501,9 @@ function showGameScreen() {
  *  are the referee — a refusal means someone else got there first. */
 function doClaim(chair) {
   if (!roomCode || playerIndex == null) return;
-  claimChair(roomCode, playerIndex, chair).then((ok) => {
+  const code = roomCode;
+  const index = playerIndex;
+  waitForRunAck(chair).then(() => claimChair(code, index, chair)).then((ok) => {
     if (ok) { playSound('tap'); return; }
     onChairTaken();
     cancelClaimPreview();                               // stand up by that chair
@@ -527,13 +529,39 @@ function renderGameView() {
   });
 }
 
+/**
+ * The rules accept a claim only after the player's run to that chair is stored
+ * (game/runs, same chair) and at least 150 ms of server time have passed since it.
+ * So the claim waits for the run write to be confirmed and then RUN_CLAIM_GAP_MS more.
+ * Server time at the claim is then always >= run.at + RUN_CLAIM_GAP_MS, however the
+ * network delays the two writes. Real runs take 250 ms or more, so this rarely waits.
+ */
+const RUN_CLAIM_GAP_MS = 200;
+let lastRun = null;   // { chair, done: Promise<boolean>, ackAt } — the latest run we shared
+
+function waitForRunAck(chair) {
+  const run = lastRun;
+  if (!run || run.chair !== chair) return Promise.resolve();
+  return run.done.then((stored) => {
+    if (!stored) return undefined;
+    const wait = run.ackAt + RUN_CLAIM_GAP_MS - performance.now();
+    return wait > 0 ? new Promise((resolve) => setTimeout(resolve, wait)) : undefined;
+  });
+}
+
 /** We set off for a chair: share it so every screen shows the race live. */
 function doRun({ chair, x, y }) {
   if (!roomCode || playerIndex == null) return;
-  writeRun(roomCode, playerIndex, { chair, x, y }).catch((err) => {
-    // Only the animation on other screens is lost; the claim still decides the chair.
+  const run = { chair, done: null, ackAt: 0 };
+  run.done = writeRun(roomCode, playerIndex, { chair, x, y }).then(() => {
+    run.ackAt = performance.now();
+    return true;
+  }).catch((err) => {
+    // Without a stored run the rules refuse the claim too; it is reported as taken.
     console.warn('Run not shared:', err?.message || err);
+    return false;
   });
+  lastRun = run;
 }
 
 function nameOf(key) { return roomPlayers[key]?.name || 'A player'; }
