@@ -3,24 +3,32 @@ import { AccessToken } from 'livekit-server-sdk';
 
 /**
  * Vercel serverless function: mints a short-lived LiveKit access token for the
- * Snakes & Ladders voice feature.
+ * Musical Chairs voice feature.
  *
- * Security ("jose" verification): the caller must present a valid Firebase
- * anonymous ID token (Authorization: Bearer <idToken>). We verify its
- * signature against Google's public keys and check issuer/audience for our
- * Firebase project, so only real authenticated users of this app can obtain a
- * LiveKit token. The token is scoped to the requested room only.
+ * Security:
+ * 1. The caller must present a valid Firebase anonymous ID token
+ *    (Authorization: Bearer <idToken>), verified with jose against Google's
+ *    public keys and this app's Firebase project (issuer/audience).
+ * 2. The caller must own the requested seat: the Realtime Database is read
+ *    through its REST API with the caller's own ID token, and
+ *    `<ROOM_NODE>/<code>/players/<identity>/uid` must equal the caller's uid.
+ *    Without this, anyone who knew a room code could listen in, or reuse a
+ *    real player's identity and kick them out of voice.
+ * The LiveKit token is scoped to that one room.
  *
  * Required Vercel env (server-side, NOT VITE_):
- *   LIVEKIT_API_KEY, LIVEKIT_API_SECRET
+ *   LIVEKIT_API_KEY, LIVEKIT_API_SECRET,
+ *   FIREBASE_DATABASE_URL (or VITE_FIREBASE_DATABASE_URL, if exposed to functions)
  * Optional: FIREBASE_PROJECT_ID (defaults to the app's project).
  */
 const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || 'skb-games';
+const ROOM_NODE = 'chairs-rooms';       // = src/firebase-sync.js ROOM_PATH
 const ROOM_RE = /^[A-HJ-NP-Z]{4}$/;
-const IDENTITY_RE = /^player_[0-7]$/;
+const IDENTITY_RE = /^player_[0-7]$/;   // 8 seats (MAX_PLAYERS)
 // Namespaces the LiveKit room per game so different games sharing one LiveKit
 // project can never land in the same voice room even with an identical code.
 const GAME_RE = /^[a-z][a-z0-9-]{1,15}$/;
+const MEMBERSHIP_TIMEOUT_MS = 5000;
 
 const JWKS = createRemoteJWKSet(
   new URL('https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com'),
@@ -28,6 +36,25 @@ const JWKS = createRemoteJWKSet(
 
 function sanitizeName(value) {
   return String(value || 'Player').replace(/[^\p{L}\p{N} _-]/gu, '').trim().slice(0, 16) || 'Player';
+}
+
+function databaseUrl() {
+  return String(process.env.FIREBASE_DATABASE_URL || process.env.VITE_FIREBASE_DATABASE_URL || '')
+    .trim().replace(/\/+$/, '');
+}
+
+/** Reads the uid that owns `identity` in room `code`, as the caller (rules apply). */
+async function seatOwner(dbUrl, code, identity, idToken) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), MEMBERSHIP_TIMEOUT_MS);
+  try {
+    const url = `${dbUrl}/${ROOM_NODE}/${code}/players/${identity}/uid.json?auth=${encodeURIComponent(idToken)}`;
+    const response = await fetch(url, { signal: controller.signal });
+    if (response.status !== 200) throw new Error(`membership-http-${response.status}`);
+    return await response.json();
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export default async function handler(req, res) {
@@ -38,7 +65,8 @@ export default async function handler(req, res) {
   try {
     const apiKey = process.env.LIVEKIT_API_KEY;
     const apiSecret = process.env.LIVEKIT_API_SECRET;
-    if (!apiKey || !apiSecret) {
+    const dbUrl = databaseUrl();
+    if (!apiKey || !apiSecret || !dbUrl) {
       res.status(500).json({ error: 'voice-not-configured' });
       return;
     }
@@ -63,7 +91,14 @@ export default async function handler(req, res) {
       return;
     }
 
-    const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
+    let body;
+    try {
+      body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
+    } catch (_) {
+      res.status(400).json({ error: 'invalid-body' });
+      return;
+    }
+    body = body || {};
     const code = String(body.room || '').toUpperCase();
     const game = String(body.game || '').toLowerCase();
     const identity = String(body.identity || '');
@@ -71,6 +106,19 @@ export default async function handler(req, res) {
       res.status(400).json({ error: 'invalid-room-or-identity' });
       return;
     }
+
+    let owner;
+    try {
+      owner = await seatOwner(dbUrl, code, identity, idToken);
+    } catch (_) {
+      res.status(503).json({ error: 'membership-check-failed' });
+      return;
+    }
+    if (owner !== uid) {
+      res.status(403).json({ error: 'not-in-room' });
+      return;
+    }
+
     // Per-game namespaced LiveKit room name.
     const room = `${game}-${code}`;
 
