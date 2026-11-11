@@ -285,7 +285,10 @@ export function dueTransition(game, players, serverNow) {
   if (game.phase !== PHASES.CLAIMING && noActivePlayerOnline(game, players)) return null;
   if (game.phase === PHASES.MUSIC) return isPhaseDue(game, serverNow) ? 'stop' : null;
   if (game.phase === PHASES.CLAIMING) {
-    return isPhaseDue(game, serverNow) || allChairsClaimed(game) || everyoneSettled(game, players) ? 'reveal' : null;
+    // Final two (one chair): never close early on "settled" — a brief drop of both
+    // finalists would otherwise turn into an instant draw. Wait out CLAIM_MS.
+    const settledEarly = chairCount(game) > 1 && everyoneSettled(game, players);
+    return isPhaseDue(game, serverNow) || allChairsClaimed(game) || settledEarly ? 'reveal' : null;
   }
   if (game.phase === PHASES.REVEAL) return isPhaseDue(game, serverNow) ? 'next' : null;
   return null;

@@ -631,13 +631,16 @@ function handleGameUpdate(game) {
 }
 
 /* ======= RESULTS ======= */
-/** Play Again belongs to the host — or, if the host has gone, to the first connected seat. */
+/** Play Again belongs to the host only: in the lobby only the host can Start,
+ *  so restarting without the host would strand everyone in a dead lobby. */
 function mayRestart() {
   if (!currentGame || (currentGame.status !== 'finished' && !isDraw(currentGame))) return false;
-  if (isHost) return true;
-  if (roomPlayers.player_0?.connected !== false) return false;
-  const connected = Object.keys(roomPlayers).filter((k) => roomPlayers[k]?.name && roomPlayers[k]?.connected !== false).sort();
-  return connected[0] === localSlot();
+  return isHost;
+}
+
+/** True when this device is not the host and the host (player_0) is offline. */
+function hostLeft() {
+  return !isHost && roomPlayers.player_0?.connected === false;
 }
 
 function showResults(game) {
@@ -684,7 +687,8 @@ function showResults(game) {
         document.createTextNode(` ${p.name || 'Player'}${row.key === me ? ' (you)' : ''}`),
       );
       const right = document.createElement('span');
-      right.textContent = row.winner ? 'last one seated' : isDraw(game) ? 'nobody sat' : `🪑 out in round ${row.survived}`;
+      const knockedOut = Number.isInteger(game.out?.[row.key]);
+      right.textContent = row.winner ? 'last one seated' : (isDraw(game) && !knockedOut) ? 'nobody sat' : `🪑 out in round ${row.survived}`;
       li.append(left, right);
       if (row.winner) li.classList.add('winner');
       list.appendChild(li);
@@ -695,14 +699,26 @@ function showResults(game) {
 }
 
 /** Re-evaluated on presence changes too: if the host drops on the results screen,
- *  the first connected seat inherits Play Again. */
+ *  Play Again is hidden (Home only) with a short note that the host left. */
 function refreshPlayAgain() {
   const playAgain = document.getElementById('btn-play-again');
   if (!playAgain || !resultsShown) return;
   if (playAgain.textContent === 'Restarting…') return;
-  playAgain.hidden = false;
+  const gone = hostLeft();
+  const display = document.getElementById('winner-display');
+  let note = document.getElementById('mc-host-left-note');
+  if (gone && display && !note) {
+    note = document.createElement('div');
+    note.id = 'mc-host-left-note';
+    note.className = 'results-note';
+    note.textContent = 'The host left — tap Home to leave.';
+    display.appendChild(note);
+  } else if (!gone && note) {
+    note.remove();
+  }
+  playAgain.hidden = gone;
   const can = mayRestart();
-  playAgain.textContent = can ? 'Play Again' : (roomPlayers.player_0?.connected === false ? 'Waiting…' : 'Waiting for host…');
+  playAgain.textContent = can ? 'Play Again' : 'Waiting for host…';
   playAgain.disabled = !can;
 }
 
